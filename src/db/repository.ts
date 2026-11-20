@@ -137,6 +137,7 @@ async function seedStarterDataForUser(userId: number) {
 export async function getOrCreateUser(params: {
   uid: string;
   email: string;
+  phone?: string | null;
   displayName?: string | null;
   authProvider?: string;
   passwordHash?: string | null;
@@ -158,6 +159,9 @@ export async function getOrCreateUser(params: {
       if (params.passwordHash && !current.passwordHash) {
         updates.passwordHash = params.passwordHash;
       }
+      if (params.phone && !current.phone) {
+        updates.phone = params.phone;
+      }
       if (Object.keys(updates).length > 0) {
         const updated = await db
           .update(users)
@@ -174,6 +178,7 @@ export async function getOrCreateUser(params: {
       .values({
         uid: params.uid,
         email: normalizedEmail,
+        phone: params.phone ?? null,
         displayName: params.displayName || normalizedEmail.split('@')[0],
         passwordHash: params.passwordHash ?? null,
         authProvider: params.authProvider || 'google',
@@ -182,6 +187,7 @@ export async function getOrCreateUser(params: {
         target: users.uid,
         set: {
           email: normalizedEmail,
+          ...(params.phone ? { phone: params.phone } : {}),
           displayName: params.displayName || normalizedEmail.split('@')[0],
         },
       })
@@ -211,6 +217,66 @@ export async function findUserByEmail(email: string) {
   }
 }
 
+export async function findUserByPhone(phone: string) {
+  try {
+    const rows = await db
+      .select()
+      .from(users)
+      .where(eq(users.phone, phone))
+      .limit(1);
+    return rows[0] ?? null;
+  } catch (error) {
+    console.error('Database error in findUserByPhone:', error);
+    throw new Error('Unable to look up phone account.', { cause: error });
+  }
+}
+
+export async function getOrCreatePhoneUser(params: {
+  phone: string;
+  displayName?: string | null;
+}) {
+  try {
+    const existing = await findUserByPhone(params.phone);
+    if (existing) {
+      if (params.displayName && !existing.displayName) {
+        const updated = await db
+          .update(users)
+          .set({ displayName: params.displayName })
+          .where(eq(users.id, existing.id))
+          .returning();
+        return updated[0];
+      }
+      return existing;
+    }
+
+    const uid = `phone:${crypto.randomUUID()}`;
+    const inserted = await db
+      .insert(users)
+      .values({
+        uid,
+        email: null,
+        phone: params.phone,
+        displayName: params.displayName?.trim() || params.phone,
+        passwordHash: null,
+        authProvider: 'phone-otp',
+      })
+      .onConflictDoUpdate({
+        target: users.uid,
+        set: {
+          displayName: params.displayName?.trim() || params.phone,
+        },
+      })
+      .returning();
+
+    const user = inserted[0];
+    await seedStarterDataForUser(user.id);
+    return user;
+  } catch (error) {
+    console.error('Database error in getOrCreatePhoneUser:', error);
+    throw new Error('Unable to sync mobile account.', { cause: error });
+  }
+}
+
 export async function findUserByUid(uid: string) {
   try {
     const rows = await db.select().from(users).where(eq(users.uid, uid)).limit(1);
@@ -221,14 +287,21 @@ export async function findUserByUid(uid: string) {
   }
 }
 
-export async function createOtpCode(email: string, code: string, purpose: string) {
+export async function createOtpCode(params: {
+  channel: 'email' | 'sms';
+  email?: string | null;
+  phone?: string | null;
+  code: string;
+  purpose: string;
+}) {
   try {
-    const normalized = email.trim().toLowerCase();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await db.insert(otpCodes).values({
-      email: normalized,
-      code,
-      purpose,
+      channel: params.channel,
+      email: params.email ? params.email.trim().toLowerCase() : null,
+      phone: params.phone ?? null,
+      code: params.code,
+      purpose: params.purpose,
       expiresAt,
       consumed: false,
     });
@@ -238,17 +311,27 @@ export async function createOtpCode(email: string, code: string, purpose: string
   }
 }
 
-export async function verifyAndConsumeOtp(email: string, code: string) {
+export async function verifyAndConsumeOtp(params: {
+  channel: 'email' | 'sms';
+  email?: string | null;
+  phone?: string | null;
+  code: string;
+}) {
   try {
-    const normalized = email.trim().toLowerCase();
     const now = new Date();
+    const targetCondition =
+      params.channel === 'sms'
+        ? eq(otpCodes.phone, params.phone || '')
+        : eq(otpCodes.email, (params.email || '').trim().toLowerCase());
+
     const matching = await db
       .select()
       .from(otpCodes)
       .where(
         and(
-          eq(otpCodes.email, normalized),
-          eq(otpCodes.code, code.trim()),
+          eq(otpCodes.channel, params.channel),
+          targetCondition,
+          eq(otpCodes.code, params.code.trim()),
           eq(otpCodes.consumed, false),
           gt(otpCodes.expiresAt, now)
         )

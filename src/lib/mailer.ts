@@ -1,14 +1,5 @@
 import nodemailer from 'nodemailer';
 
-export class EmailNotConfiguredError extends Error {
-  constructor() {
-    super(
-      'Email delivery is not configured yet. Add RESEND_API_KEY or SMTP settings (SMTP_HOST, SMTP_USER, SMTP_PASS) in your app Secrets to receive OTP codes by email, or use Login with Google.'
-    );
-    this.name = 'EmailNotConfiguredError';
-  }
-}
-
 function buildOtpEmailContent(code: string, purpose: 'login' | 'signup' | 'otp') {
   const actionLabel =
     purpose === 'signup'
@@ -48,7 +39,7 @@ export async function sendOtpEmail(
   toEmail: string,
   code: string,
   purpose: 'login' | 'signup' | 'otp'
-): Promise<void> {
+): Promise<{ delivered: 'email' | 'preview' }> {
   const resendKey = process.env.RESEND_API_KEY?.trim();
   const smtpHost = process.env.SMTP_HOST?.trim();
   const smtpUser = process.env.SMTP_USER?.trim();
@@ -60,7 +51,6 @@ export async function sendOtpEmail(
 
   const { subject, text, html } = buildOtpEmailContent(code, purpose);
 
-  // 1. Prefer Resend HTTPS API if configured
   if (resendKey) {
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -80,12 +70,13 @@ export async function sendOtpEmail(
     if (!response.ok) {
       const errBody = await response.text().catch(() => '');
       console.error('Resend OTP delivery failed:', response.status, errBody);
-      throw new Error('Could not send verification email. Please verify your email provider settings.');
+      throw new Error(
+        'Could not deliver verification email. Check your RESEND_API_KEY and sender settings.'
+      );
     }
-    return;
+    return { delivered: 'email' };
   }
 
-  // 2. Fallback to SMTP (Gmail App Password, Brevo, Postmark, SendGrid, etc.)
   if (smtpHost && smtpUser && smtpPass) {
     const port = Number(process.env.SMTP_PORT || 587);
     const transporter = nodemailer.createTransport({
@@ -105,8 +96,8 @@ export async function sendOtpEmail(
       text,
       html,
     });
-    return;
+    return { delivered: 'email' };
   }
 
-  throw new EmailNotConfiguredError();
+  return { delivered: 'preview' };
 }

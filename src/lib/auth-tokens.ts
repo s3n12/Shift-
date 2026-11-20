@@ -10,7 +10,8 @@ const SESSION_SECRET =
 
 export interface SessionPayload {
   uid: string;
-  email: string;
+  email?: string | null;
+  phone?: string | null;
   name?: string;
   exp: number;
 }
@@ -64,7 +65,7 @@ export function verifyShiftToken(token: string): SessionPayload | null {
 
   try {
     const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as SessionPayload;
-    if (!parsed.uid || !parsed.email || typeof parsed.exp !== 'number') return null;
+    if (!parsed.uid || typeof parsed.exp !== 'number') return null;
     if (Date.now() > parsed.exp) return null;
     return parsed;
   } catch {

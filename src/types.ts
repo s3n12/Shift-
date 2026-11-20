@@ -5,7 +5,8 @@ export type PageRoute = 'dashboard' | 'habits' | 'trips';
 export interface UserProfile {
   id: number;
   uid: string;
-  email: string;
+  email: string | null;
+  phone?: string | null;
   displayName: string | null;
   authProvider: string;
 }

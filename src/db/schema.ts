@@ -18,7 +18,8 @@ export interface PackingItem {
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
   uid: text('uid').notNull().unique(),
-  email: text('email').notNull().unique(),
+  email: text('email').unique(),
+  phone: text('phone'),
   displayName: text('display_name'),
   passwordHash: text('password_hash'),
   authProvider: text('auth_provider').notNull().default('google'),
@@ -27,7 +28,9 @@ export const users = pgTable('users', {
 
 export const otpCodes = pgTable('otp_codes', {
   id: serial('id').primaryKey(),
-  email: text('email').notNull(),
+  email: text('email'),
+  phone: text('phone'),
+  channel: text('channel').notNull().default('email'),
   code: text('code').notNull(),
   purpose: text('purpose').notNull().default('login'),
   expiresAt: timestamp('expires_at').notNull(),

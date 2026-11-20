@@ -6,7 +6,8 @@ import { findUserByUid, getOrCreateUser } from '../db/repository.ts';
 export interface AuthenticatedUser {
   id: number;
   uid: string;
-  email: string;
+  email: string | null;
+  phone: string | null;
   displayName: string | null;
   authProvider: string;
 }
@@ -27,7 +28,7 @@ export const requireAuth = async (
 
   const token = authHeader.slice('Bearer '.length).trim();
 
-  // 1. Check Shift Email/Password + OTP signed session token
+  // 1. Check Shift Email/Password, Email OTP, or Mobile SMS OTP signed session token
   if (token.startsWith('shift.')) {
     const payload = verifyShiftToken(token);
     if (!payload) {
@@ -42,6 +43,7 @@ export const requireAuth = async (
         id: dbUser.id,
         uid: dbUser.uid,
         email: dbUser.email,
+        phone: dbUser.phone,
         displayName: dbUser.displayName,
         authProvider: dbUser.authProvider,
       };
@@ -66,6 +68,7 @@ export const requireAuth = async (
       id: dbUser.id,
       uid: dbUser.uid,
       email: dbUser.email,
+      phone: dbUser.phone,
       displayName: dbUser.displayName,
       authProvider: dbUser.authProvider,
     };

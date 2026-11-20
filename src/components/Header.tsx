@@ -128,7 +128,7 @@ export function Header({
         {/* Zone 3: User sign-out pill button */}
         <div className="flex items-center gap-3 shrink-0">
           <span className="hidden lg:inline-block text-sm text-[#64748B] truncate max-w-[140px]">
-            {user.displayName || user.email.split('@')[0]}
+            {user.displayName || user.phone || (user.email ? user.email.split('@')[0] : 'Account')}
           </span>
           <button
             type="button"
