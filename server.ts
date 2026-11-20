@@ -11,7 +11,6 @@ import {
   verifyPassword,
 } from './src/lib/auth-tokens.ts';
 import { sendOtpEmail } from './src/lib/mailer.ts';
-import { maskPhoneNumber, normalizePhoneNumber, sendOtpSms } from './src/lib/sms.ts';
 import {
   createHabit,
   createOtpCode,
@@ -21,8 +20,6 @@ import {
   deleteTask,
   deleteTrip,
   findUserByEmail,
-  findUserByPhone,
-  getOrCreatePhoneUser,
   getOrCreateUser,
   listHabits,
   listTasks,
@@ -44,51 +41,16 @@ function maskEmail(email: string): string {
   return `${visible}@${domain}`;
 }
 
-// --- AUTH ROUTES (Email/Password, Email OTP, Mobile SMS OTP, and Google Sign-In) ---
+// --- AUTH ROUTES (Email/Password + Email OTP and Google Sign-In) ---
 
 app.post('/api/auth/request-otp', async (req, res) => {
   try {
-    const { email, password, mode, displayName, channel, countryCode, phone } = req.body as {
+    const { email, password, mode, displayName } = req.body as {
       email?: string;
       password?: string;
-      mode?: 'login' | 'signup' | 'otp' | 'sms';
+      mode?: 'login' | 'signup' | 'otp';
       displayName?: string;
-      channel?: 'email' | 'sms';
-      countryCode?: string;
-      phone?: string;
     };
-
-    const resolvedChannel: 'email' | 'sms' =
-      channel === 'sms' || mode === 'sms' ? 'sms' : 'email';
-
-    if (resolvedChannel === 'sms') {
-      const normalizedPhone = normalizePhoneNumber(countryCode || '+91', phone || '');
-      if (!normalizedPhone) {
-        return res
-          .status(400)
-          .json({ error: 'Please enter a valid mobile number (7 to 15 digits).' });
-      }
-
-      const existingPhoneUser = await findUserByPhone(normalizedPhone);
-      const code = generateSixDigitOtp();
-      const delivery = await sendOtpSms(normalizedPhone, code);
-
-      await createOtpCode({
-        channel: 'sms',
-        phone: normalizedPhone,
-        code,
-        purpose: 'sms-login',
-      });
-
-      return res.json({
-        ok: true,
-        channel: 'sms',
-        delivered: delivery.delivered,
-        maskedTarget: maskPhoneNumber(normalizedPhone),
-        ...(delivery.delivered === 'preview' ? { verificationCode: code } : {}),
-        displayName: displayName?.trim() || existingPhoneUser?.displayName || null,
-      });
-    }
 
     const normalizedEmail = (email || '').trim().toLowerCase();
     if (!normalizedEmail || !normalizedEmail.includes('@')) {
@@ -107,7 +69,7 @@ app.post('/api/auth/request-otp', async (req, res) => {
       }
       if (!existing) {
         return res.status(404).json({
-          error: 'No account found for this email. Switch to Create Account to get started.',
+          error: 'No account found for this email. Switch to Sign Up to get started.',
         });
       }
       if (existing.passwordHash) {
@@ -118,8 +80,8 @@ app.post('/api/auth/request-otp', async (req, res) => {
       } else {
         const providerHint =
           existing.authProvider === 'google'
-            ? 'This email was registered with Google. Use Login with Google, Email OTP, or set a password under Create Account.'
-            : 'No password is set for this email yet. Use Create Account to set a password, or sign in with Email OTP.';
+            ? 'This email was registered with Google. Use Login with Google, Email OTP, or set a password under Sign Up.'
+            : 'No password is set for this email yet. Use Sign Up to set a password, or sign in with Email OTP.';
         return res.status(400).json({ error: providerHint });
       }
     } else if (authMode === 'signup') {
@@ -133,37 +95,7 @@ app.post('/api/auth/request-otp', async (req, res) => {
       }
     }
 
-    let optionalPhone: string | null = null;
-    if (authMode === 'signup' && phone && phone.trim()) {
-      optionalPhone = normalizePhoneNumber(countryCode || '+91', phone);
-      if (!optionalPhone) {
-        return res
-          .status(400)
-          .json({ error: 'Please enter a valid optional mobile number (7 to 15 digits), or leave it blank.' });
-      }
-    }
-
     const code = generateSixDigitOtp();
-
-    if (optionalPhone) {
-      const delivery = await sendOtpSms(optionalPhone, code);
-      await createOtpCode({
-        channel: 'sms',
-        email: normalizedEmail,
-        phone: optionalPhone,
-        code,
-        purpose: authMode,
-      });
-
-      return res.json({
-        ok: true,
-        channel: 'sms',
-        delivered: delivery.delivered,
-        maskedTarget: maskPhoneNumber(optionalPhone),
-        ...(delivery.delivered === 'preview' ? { verificationCode: code } : {}),
-        displayName: displayName?.trim() || existing?.displayName || null,
-      });
-    }
 
     const delivery = await sendOtpEmail(normalizedEmail, code, authMode);
     await createOtpCode({
@@ -193,98 +125,16 @@ app.post('/api/auth/request-otp', async (req, res) => {
 
 app.post('/api/auth/verify-otp', async (req, res) => {
   try {
-    const { email, code, password, displayName, mode, channel, countryCode, phone } =
-      req.body as {
-        email?: string;
-        code?: string;
-        password?: string;
-        displayName?: string;
-        mode?: 'login' | 'signup' | 'otp' | 'sms';
-        channel?: 'email' | 'sms';
-        countryCode?: string;
-        phone?: string;
-      };
+    const { email, code, password, displayName, mode } = req.body as {
+      email?: string;
+      code?: string;
+      password?: string;
+      displayName?: string;
+      mode?: 'login' | 'signup' | 'otp';
+    };
 
     if (!code || code.trim().length !== 6) {
       return res.status(400).json({ error: 'Please enter the 6-digit verification code.' });
-    }
-
-    const resolvedChannel: 'email' | 'sms' =
-      channel === 'sms' || mode === 'sms' ? 'sms' : 'email';
-
-    if (resolvedChannel === 'sms') {
-      const normalizedPhone = normalizePhoneNumber(countryCode || '+91', phone || '');
-      if (!normalizedPhone) {
-        return res.status(400).json({ error: 'Invalid mobile number.' });
-      }
-
-      const matched = await verifyAndConsumeOtp({
-        channel: 'sms',
-        phone: normalizedPhone,
-        code,
-      });
-      if (!matched) {
-        return res.status(401).json({ error: 'Invalid or expired SMS verification code.' });
-      }
-
-      // If signing up with Email + Password + optional Mobile SMS OTP, link all three
-      if (mode === 'signup' && email && email.trim()) {
-        const normalizedEmail = email.trim().toLowerCase();
-        const existing = await findUserByEmail(normalizedEmail);
-        const passwordHash = password ? hashPassword(password) : null;
-        const user = await getOrCreateUser({
-          uid: existing ? existing.uid : `email:${crypto.randomUUID()}`,
-          email: normalizedEmail,
-          phone: normalizedPhone,
-          displayName:
-            displayName?.trim() || existing?.displayName || normalizedEmail.split('@')[0],
-          authProvider: passwordHash ? 'email-password' : existing?.authProvider || 'phone-otp',
-          passwordHash,
-        });
-
-        const token = signShiftToken({
-          uid: user.uid,
-          email: user.email,
-          phone: user.phone,
-          name: user.displayName || undefined,
-        });
-
-        return res.json({
-          token,
-          user: {
-            id: user.id,
-            uid: user.uid,
-            email: user.email,
-            phone: user.phone,
-            displayName: user.displayName,
-            authProvider: user.authProvider,
-          },
-        });
-      }
-
-      const user = await getOrCreatePhoneUser({
-        phone: normalizedPhone,
-        displayName: displayName?.trim() || null,
-      });
-
-      const token = signShiftToken({
-        uid: user.uid,
-        email: user.email,
-        phone: user.phone,
-        name: user.displayName || undefined,
-      });
-
-      return res.json({
-        token,
-        user: {
-          id: user.id,
-          uid: user.uid,
-          email: user.email,
-          phone: user.phone,
-          displayName: user.displayName,
-          authProvider: user.authProvider,
-        },
-      });
     }
 
     const normalizedEmail = (email || '').trim().toLowerCase();

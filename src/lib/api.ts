@@ -27,18 +27,15 @@ async function apiFetch<T>(
 
 export const api = {
   requestOtp(body: {
-    email?: string;
+    email: string;
     password?: string;
-    mode: 'login' | 'signup' | 'otp' | 'sms';
-    channel?: 'email' | 'sms';
-    countryCode?: string;
-    phone?: string;
+    mode: 'login' | 'signup' | 'otp';
     displayName?: string;
   }) {
     return apiFetch<{
       ok: boolean;
-      channel: 'email' | 'sms';
-      delivered: 'email' | 'sms' | 'preview';
+      channel: 'email';
+      delivered: 'email' | 'preview';
       maskedTarget: string;
       verificationCode?: string;
       displayName: string | null;
@@ -49,14 +46,11 @@ export const api = {
   },
 
   verifyOtp(body: {
-    email?: string;
+    email: string;
     code: string;
     password?: string;
     displayName?: string;
-    mode: 'login' | 'signup' | 'otp' | 'sms';
-    channel?: 'email' | 'sms';
-    countryCode?: string;
-    phone?: string;
+    mode: 'login' | 'signup' | 'otp';
   }) {
     return apiFetch<{ token: string; user: UserProfile }>(
       '/api/auth/verify-otp',
