@@ -1,0 +1,6 @@
+{
+  "name": "Shift",
+  "description": "A calm dual-mode daily planner that separates weekday work focus from relaxing evening and weekend habits and upcoming getaways.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
