@@ -15,6 +15,7 @@ async function apiFetch<T>(
 
   const response = await fetch(path, {
     ...options,
+    credentials: 'include',
     headers,
   });
 
@@ -26,12 +27,29 @@ async function apiFetch<T>(
 }
 
 export const api = {
-  requestOtp(body: {
-    email: string;
-    password?: string;
-    mode: 'login' | 'signup' | 'otp';
-    displayName?: string;
-  }) {
+  login(body: { email: string; password: string }) {
+    return apiFetch<{ token: string; user: UserProfile }>(
+      '/api/auth/login',
+      null,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }
+    );
+  },
+
+  signup(body: { email: string; password: string; displayName?: string }) {
+    return apiFetch<{ token: string; user: UserProfile }>(
+      '/api/auth/signup',
+      null,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }
+    );
+  },
+
+  requestOtp(body: { email: string; displayName?: string }) {
     return apiFetch<{
       ok: boolean;
       channel: 'email';
@@ -45,13 +63,7 @@ export const api = {
     });
   },
 
-  verifyOtp(body: {
-    email: string;
-    code: string;
-    password?: string;
-    displayName?: string;
-    mode: 'login' | 'signup' | 'otp';
-  }) {
+  verifyOtp(body: { email: string; code: string; displayName?: string }) {
     return apiFetch<{ token: string; user: UserProfile }>(
       '/api/auth/verify-otp',
       null,
@@ -62,8 +74,17 @@ export const api = {
     );
   },
 
-  getMe(token: string) {
-    return apiFetch<{ user: UserProfile }>('/api/auth/me', token);
+  logout() {
+    return apiFetch<{ ok: boolean }>('/api/auth/logout', null, {
+      method: 'POST',
+    });
+  },
+
+  getMe(token?: string | null) {
+    return apiFetch<{ user: UserProfile; token?: string }>(
+      '/api/auth/me',
+      token ?? null
+    );
   },
 
   // Tasks

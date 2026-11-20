@@ -41,14 +41,154 @@ function maskEmail(email: string): string {
   return `${visible}@${domain}`;
 }
 
-// --- AUTH ROUTES (Email/Password + Email OTP and Google Sign-In) ---
+// --- AUTH ROUTES (Direct Email/Password Sign In & Sign Up, Email OTP, and Google Sign-In) ---
+
+function setSessionCookie(req: express.Request, res: express.Response, token: string) {
+  const isHttps =
+    req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.cookie('shift_session', token, {
+    httpOnly: true,
+    secure: isHttps,
+    sameSite: isHttps ? 'none' : 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: '/',
+  });
+}
+
+function formatUserResponse(user: {
+  id: number;
+  uid: string;
+  email: string | null;
+  phone: string | null;
+  displayName: string | null;
+  authProvider: string;
+}) {
+  return {
+    id: user.id,
+    uid: user.uid,
+    email: user.email,
+    phone: user.phone,
+    displayName: user.displayName,
+    authProvider: user.authProvider,
+  };
+}
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body as {
+      email?: string;
+      password?: string;
+    };
+
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    if (!normalizedEmail || !normalizedEmail.includes('@')) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+    if (!password || password.length < 6) {
+      return res
+        .status(400)
+        .json({ error: 'Please enter your password (at least 6 characters).' });
+    }
+
+    const existing = await findUserByEmail(normalizedEmail);
+    if (!existing) {
+      return res.status(404).json({
+        error: 'No account found for this email. Switch to Sign Up to create one.',
+      });
+    }
+
+    if (!existing.passwordHash) {
+      const hint =
+        existing.authProvider === 'google'
+          ? 'This account was created with Google. Use Login with Google, Email OTP, or set a password in Sign Up.'
+          : 'No password is set for this email yet. Switch to Sign Up to set your password, or sign in with Email OTP.';
+      return res.status(400).json({ error: hint });
+    }
+
+    const valid = verifyPassword(password, existing.passwordHash);
+    if (!valid) {
+      return res.status(401).json({ error: 'Incorrect email or password.' });
+    }
+
+    const token = signShiftToken({
+      uid: existing.uid,
+      email: existing.email,
+      phone: existing.phone,
+      name: existing.displayName || undefined,
+    });
+
+    setSessionCookie(req, res, token);
+
+    return res.json({
+      token,
+      user: formatUserResponse(existing),
+    });
+  } catch (error) {
+    console.error('Error in /api/auth/login:', error);
+    return res.status(500).json({ error: 'Unable to sign in right now. Please try again.' });
+  }
+});
+
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const { email, password, displayName } = req.body as {
+      email?: string;
+      password?: string;
+      displayName?: string;
+    };
+
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    if (!normalizedEmail || !normalizedEmail.includes('@')) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+    if (!password || password.length < 6) {
+      return res
+        .status(400)
+        .json({ error: 'Password must be at least 6 characters.' });
+    }
+
+    const existing = await findUserByEmail(normalizedEmail);
+    if (existing && existing.passwordHash) {
+      return res.status(409).json({
+        error: 'An account with this email already exists. Switch to Sign In instead.',
+      });
+    }
+
+    const passwordHash = hashPassword(password);
+    const user = await getOrCreateUser({
+      uid: existing ? existing.uid : `email:${crypto.randomUUID()}`,
+      email: normalizedEmail,
+      displayName:
+        displayName?.trim() || existing?.displayName || normalizedEmail.split('@')[0],
+      authProvider: 'email-password',
+      passwordHash,
+    });
+
+    const token = signShiftToken({
+      uid: user.uid,
+      email: user.email,
+      phone: user.phone,
+      name: user.displayName || undefined,
+    });
+
+    setSessionCookie(req, res, token);
+
+    return res.status(201).json({
+      token,
+      user: formatUserResponse(user),
+    });
+  } catch (error) {
+    console.error('Error in /api/auth/signup:', error);
+    return res
+      .status(500)
+      .json({ error: 'Unable to create your account right now. Please try again.' });
+  }
+});
 
 app.post('/api/auth/request-otp', async (req, res) => {
   try {
-    const { email, password, mode, displayName } = req.body as {
+    const { email, displayName } = req.body as {
       email?: string;
-      password?: string;
-      mode?: 'login' | 'signup' | 'otp';
       displayName?: string;
     };
 
@@ -57,52 +197,15 @@ app.post('/api/auth/request-otp', async (req, res) => {
       return res.status(400).json({ error: 'Please enter a valid email address.' });
     }
 
-    const authMode: 'login' | 'signup' | 'otp' =
-      mode === 'signup' ? 'signup' : mode === 'otp' ? 'otp' : 'login';
     const existing = await findUserByEmail(normalizedEmail);
-
-    if (authMode === 'login') {
-      if (!password || password.length < 6) {
-        return res
-          .status(400)
-          .json({ error: 'Please enter your password (at least 6 characters).' });
-      }
-      if (!existing) {
-        return res.status(404).json({
-          error: 'No account found for this email. Switch to Sign Up to get started.',
-        });
-      }
-      if (existing.passwordHash) {
-        const valid = verifyPassword(password, existing.passwordHash);
-        if (!valid) {
-          return res.status(401).json({ error: 'Incorrect email or password.' });
-        }
-      } else {
-        const providerHint =
-          existing.authProvider === 'google'
-            ? 'This email was registered with Google. Use Login with Google, Email OTP, or set a password under Sign Up.'
-            : 'No password is set for this email yet. Use Sign Up to set a password, or sign in with Email OTP.';
-        return res.status(400).json({ error: providerHint });
-      }
-    } else if (authMode === 'signup') {
-      if (!password || password.length < 6) {
-        return res.status(400).json({ error: 'Password must be at least 6 characters.' });
-      }
-      if (existing && existing.passwordHash) {
-        return res.status(409).json({
-          error: 'An account with this email already exists. Sign in instead.',
-        });
-      }
-    }
-
     const code = generateSixDigitOtp();
 
-    const delivery = await sendOtpEmail(normalizedEmail, code, authMode);
+    const delivery = await sendOtpEmail(normalizedEmail, code, 'otp');
     await createOtpCode({
       channel: 'email',
       email: normalizedEmail,
       code,
-      purpose: authMode,
+      purpose: 'otp',
     });
 
     return res.json({
@@ -118,28 +221,26 @@ app.post('/api/auth/request-otp', async (req, res) => {
     const msg =
       error instanceof Error
         ? error.message
-        : 'Could not start verification. Please try again.';
+        : 'Could not send verification code. Please try again.';
     return res.status(500).json({ error: msg });
   }
 });
 
 app.post('/api/auth/verify-otp', async (req, res) => {
   try {
-    const { email, code, password, displayName, mode } = req.body as {
+    const { email, code, displayName } = req.body as {
       email?: string;
       code?: string;
-      password?: string;
       displayName?: string;
-      mode?: 'login' | 'signup' | 'otp';
     };
-
-    if (!code || code.trim().length !== 6) {
-      return res.status(400).json({ error: 'Please enter the 6-digit verification code.' });
-    }
 
     const normalizedEmail = (email || '').trim().toLowerCase();
     if (!normalizedEmail) {
       return res.status(400).json({ error: 'Email address is required.' });
+    }
+
+    if (!code || code.trim().length !== 6) {
+      return res.status(400).json({ error: 'Please enter the 6-digit verification code.' });
     }
 
     const matched = await verifyAndConsumeOtp({
@@ -152,15 +253,11 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     }
 
     const existing = await findUserByEmail(normalizedEmail);
-    const passwordHash =
-      mode === 'signup' && password ? hashPassword(password) : null;
-
     const user = await getOrCreateUser({
       uid: existing ? existing.uid : `email:${crypto.randomUUID()}`,
       email: normalizedEmail,
       displayName: displayName?.trim() || existing?.displayName || normalizedEmail.split('@')[0],
-      authProvider: passwordHash ? 'email-password' : existing?.authProvider || 'email-otp',
-      passwordHash,
+      authProvider: existing?.authProvider || 'email-otp',
     });
 
     const token = signShiftToken({
@@ -170,16 +267,11 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       name: user.displayName || undefined,
     });
 
+    setSessionCookie(req, res, token);
+
     return res.json({
       token,
-      user: {
-        id: user.id,
-        uid: user.uid,
-        email: user.email,
-        phone: user.phone,
-        displayName: user.displayName,
-        authProvider: user.authProvider,
-      },
+      user: formatUserResponse(user),
     });
   } catch (error) {
     console.error('Error in /api/auth/verify-otp:', error);
@@ -187,8 +279,30 @@ app.post('/api/auth/verify-otp', async (req, res) => {
   }
 });
 
+app.post('/api/auth/logout', (req, res) => {
+  const isHttps =
+    req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.clearCookie('shift_session', {
+    httpOnly: true,
+    secure: isHttps,
+    sameSite: isHttps ? 'none' : 'lax',
+    path: '/',
+  });
+  return res.json({ ok: true });
+});
+
 app.get('/api/auth/me', requireAuth, async (req: AuthRequest, res) => {
-  return res.json({ user: req.dbUser });
+  const user = req.dbUser!;
+  const isGoogle = user.authProvider === 'google' && !req.headers.cookie?.includes('shift_session=');
+  const token = isGoogle
+    ? undefined
+    : signShiftToken({
+        uid: user.uid,
+        email: user.email,
+        phone: user.phone,
+        name: user.displayName || undefined,
+      });
+  return res.json({ user, ...(token ? { token } : {}) });
 });
 
 // --- TASKS ROUTES ---

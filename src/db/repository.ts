@@ -153,11 +153,12 @@ export async function getOrCreateUser(params: {
     if (existingByEmail.length > 0) {
       const current = existingByEmail[0];
       const updates: Partial<typeof users.$inferInsert> = {};
-      if (params.displayName && !current.displayName) {
-        updates.displayName = params.displayName;
+      if (params.displayName?.trim() && (!current.displayName || params.passwordHash)) {
+        updates.displayName = params.displayName.trim();
       }
       if (params.passwordHash && !current.passwordHash) {
         updates.passwordHash = params.passwordHash;
+        updates.authProvider = 'email-password';
       }
       if (params.phone && !current.phone) {
         updates.phone = params.phone;

@@ -2,6 +2,8 @@ import { useState, type FormEvent } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
+  Eye,
+  EyeOff,
   KeyRound,
   Lock,
   Mail,
@@ -20,9 +22,10 @@ export function LoginPage() {
     useAuth();
 
   const [authMode, setAuthMode] = useState<AuthMode>('login');
-  const [step, setStep] = useState<'credentials' | 'verify'>('credentials');
+  const [otpStep, setOtpStep] = useState<'email' | 'verify'>('email');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [otpInput, setOtpInput] = useState('');
   const [maskedTarget, setMaskedTarget] = useState('');
@@ -36,32 +39,45 @@ export function LoginPage() {
 
   const switchMode = (next: AuthMode) => {
     setAuthMode(next);
-    setStep('credentials');
+    setOtpStep('email');
     setOtpInput('');
     setDeliveredCode(null);
     setLocalError(null);
     clearAuthError();
   };
 
-  const handleRequestOtp = async (e: FormEvent) => {
+  const handlePrimarySubmit = async (e: FormEvent) => {
     e.preventDefault();
     setLocalError(null);
     clearAuthError();
     setBusy(true);
     try {
-      const res = await api.requestOtp({
-        email,
-        password: authMode === 'otp' ? undefined : password,
-        mode: authMode,
-        displayName: authMode === 'signup' ? displayName : undefined,
-      });
+      if (authMode === 'login') {
+        const res = await api.login({ email: email.trim(), password });
+        completeEmailOtpLogin(res.token, res.user);
+        return;
+      }
+
+      if (authMode === 'signup') {
+        const res = await api.signup({
+          email: email.trim(),
+          password,
+          displayName: displayName.trim() || undefined,
+        });
+        completeEmailOtpLogin(res.token, res.user);
+        return;
+      }
+
+      // Email OTP mode
+      const res = await api.requestOtp({ email: email.trim() });
       setMaskedTarget(res.maskedTarget);
       setDeliveredMode(res.delivered);
       setDeliveredCode(res.verificationCode ?? null);
-      setStep('verify');
+      setOtpInput('');
+      setOtpStep('verify');
     } catch (err: unknown) {
       setLocalError(
-        err instanceof Error ? err.message : 'Unable to send verification code.'
+        err instanceof Error ? err.message : 'Unable to continue. Please try again.'
       );
     } finally {
       setBusy(false);
@@ -75,11 +91,8 @@ export function LoginPage() {
     setBusy(true);
     try {
       const res = await api.verifyOtp({
-        email,
-        code: otpInput,
-        password: authMode === 'signup' ? password : undefined,
-        displayName: authMode === 'signup' ? displayName : undefined,
-        mode: authMode,
+        email: email.trim(),
+        code: otpInput.trim(),
       });
       completeEmailOtpLogin(res.token, res.user);
     } catch (err: unknown) {
@@ -95,12 +108,8 @@ export function LoginPage() {
     setLocalError(null);
     setBusy(true);
     try {
-      const res = await api.requestOtp({
-        email,
-        password: authMode === 'otp' ? undefined : password,
-        mode: authMode,
-        displayName: authMode === 'signup' ? displayName : undefined,
-      });
+      const res = await api.requestOtp({ email: email.trim() });
+      setMaskedTarget(res.maskedTarget);
       setDeliveredMode(res.delivered);
       setDeliveredCode(res.verificationCode ?? null);
       setOtpInput('');
@@ -125,9 +134,11 @@ export function LoginPage() {
     }
   };
 
+  const isOtpVerifyView = authMode === 'otp' && otpStep === 'verify';
+
   return (
     <div className="min-h-screen bg-[#FAF8F5] grid grid-cols-1 lg:grid-cols-2 items-stretch">
-      {/* Left Side: Email, Password, Email OTP + Login with Google */}
+      {/* Left Side: Sign In, Sign Up, Email OTP + Login with Google */}
       <div className="flex flex-col justify-between px-6 py-8 sm:px-12 lg:px-16 xl:px-20">
         <div className="flex items-center justify-between">
           <span className="font-display text-2xl font-semibold tracking-tight text-[#1E293B]">
@@ -144,7 +155,7 @@ export function LoginPage() {
               Work with clarity. Unwind without guilt.
             </h1>
             <p className="mt-3 text-[15px] text-[#5C6672] leading-relaxed">
-              Sign in with Email, OTP, or Google to manage your weekday focus and calm weekend rituals.
+              Sign in with your email and password, a 6-digit Email OTP, or Google to manage weekday priorities and weekend rituals.
             </p>
           </div>
 
@@ -190,8 +201,8 @@ export function LoginPage() {
             </div>
           )}
 
-          {step === 'credentials' ? (
-            <form onSubmit={handleRequestOtp} className="space-y-4">
+          {!isOtpVerifyView ? (
+            <form onSubmit={handlePrimarySubmit} className="space-y-4">
               {authMode === 'signup' && (
                 <div>
                   <label
@@ -233,6 +244,7 @@ export function LoginPage() {
                     id="shift-email"
                     type="email"
                     required
+                    autoComplete="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
@@ -256,9 +268,12 @@ export function LoginPage() {
                     />
                     <input
                       id="shift-password"
-                      type="password"
+                      type={showPassword ? 'text' : 'password'}
                       required
                       minLength={6}
+                      autoComplete={
+                        authMode === 'signup' ? 'new-password' : 'current-password'
+                      }
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder={
@@ -266,8 +281,20 @@ export function LoginPage() {
                           ? 'At least 6 characters'
                           : 'Enter your password'
                       }
-                      className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white border border-[#E3DBD0] text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#1E293B] focus:ring-2 focus:ring-[#1E293B]/10 transition"
+                      className="w-full pl-11 pr-11 py-3 rounded-2xl bg-white border border-[#E3DBD0] text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#1E293B] focus:ring-2 focus:ring-[#1E293B]/10 transition"
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1 text-[#8C95A0] hover:text-[#1E293B] transition cursor-pointer"
+                    >
+                      {showPassword ? (
+                        <EyeOff className="w-4 h-4" strokeWidth={1.8} />
+                      ) : (
+                        <Eye className="w-4 h-4" strokeWidth={1.8} />
+                      )}
+                    </button>
                   </div>
                 </div>
               )}
@@ -277,15 +304,21 @@ export function LoginPage() {
                 disabled={busy}
                 className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-full bg-[#1E293B] text-white text-sm font-medium hover:bg-[#0F172A] active:scale-[0.99] transition-all duration-200 disabled:opacity-60 cursor-pointer"
               >
-                <ShieldCheck className="w-4 h-4 shrink-0" strokeWidth={1.9} />
+                {authMode === 'otp' && (
+                  <ShieldCheck className="w-4 h-4 shrink-0" strokeWidth={1.9} />
+                )}
                 <span>
                   {busy
-                    ? 'Sending verification code...'
-                    : authMode === 'otp'
-                      ? 'Send 6-Digit Email OTP'
+                    ? authMode === 'login'
+                      ? 'Signing in...'
                       : authMode === 'signup'
-                        ? 'Create Account & Verify OTP'
-                        : 'Continue to OTP Verification'}
+                        ? 'Creating account...'
+                        : 'Sending 6-digit code...'
+                    : authMode === 'login'
+                      ? 'Sign In to Shift'
+                      : authMode === 'signup'
+                        ? 'Create Account'
+                        : 'Send 6-Digit Email OTP'}
                 </span>
                 <ArrowRight className="w-4 h-4 shrink-0" strokeWidth={1.9} />
               </button>
@@ -300,7 +333,7 @@ export function LoginPage() {
                   />
                   <div className="text-sm flex-1 min-w-0">
                     <p className="font-medium text-[#1E293B]">
-                      OTP Verification Required
+                      Enter Verification Code
                     </p>
                     <p className="text-[#5C6672] mt-0.5 text-xs leading-relaxed">
                       {deliveredMode === 'email' ? (
@@ -313,7 +346,7 @@ export function LoginPage() {
                         </>
                       ) : (
                         <>
-                          Enter the 6-digit verification code issued for{' '}
+                          Enter the 6-digit verification code generated for{' '}
                           <span className="font-medium text-[#1E293B]">
                             {maskedTarget}
                           </span>
@@ -383,7 +416,7 @@ export function LoginPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    setStep('credentials');
+                    setOtpStep('email');
                     setOtpInput('');
                     setLocalError(null);
                   }}

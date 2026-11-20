@@ -29,7 +29,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
-  // Keep tokens strictly in memory (never localStorage)
   const tokenRef = useRef<string | null>(null);
   const isEmailSessionRef = useRef(false);
 
@@ -41,14 +40,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    let active = true;
+
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      if (!active) return;
+
       if (isEmailSessionRef.current && tokenRef.current) {
         setLoading(false);
         return;
       }
 
       if (!fbUser) {
+        // Attempt to restore an active HttpOnly cookie session (Email/Password or Email OTP)
+        try {
+          const restored = await api.getMe(null);
+          if (!active) return;
+          if (restored.user) {
+            if (restored.token) {
+              tokenRef.current = restored.token;
+              isEmailSessionRef.current = true;
+            }
+            setUser(restored.user);
+            setAuthError(null);
+            setLoading(false);
+            return;
+          }
+        } catch {
+          // No active cookie session
+        }
+
+        if (!active) return;
         tokenRef.current = null;
+        isEmailSessionRef.current = false;
         setUser(null);
         setLoading(false);
         return;
@@ -57,17 +80,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const idToken = await fbUser.getIdToken();
         await syncFirebaseUser(idToken);
-        setAuthError(null);
+        if (active) setAuthError(null);
       } catch (err) {
         console.error('Failed to sync Firebase user:', err);
-        setAuthError('Unable to sign in right now. Please try again.');
-        setUser(null);
+        if (active) {
+          setAuthError('Unable to sign in right now. Please try again.');
+          setUser(null);
+        }
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, [syncFirebaseUser]);
 
   const getToken = useCallback(async (): Promise<string | null> => {
@@ -112,6 +140,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isEmailSessionRef.current = false;
     tokenRef.current = null;
     setUser(null);
+    try {
+      await api.logout();
+    } catch {
+      // Ignore cookie clear errors
+    }
     try {
       await signOut(auth);
     } catch (err) {

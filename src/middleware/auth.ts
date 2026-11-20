@@ -16,19 +16,44 @@ export interface AuthRequest extends Request {
   dbUser?: AuthenticatedUser;
 }
 
+function readCookie(req: Request, name: string): string | null {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  const parts = raw.split(';');
+  for (const part of parts) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    if (key === name) {
+      try {
+        return decodeURIComponent(part.slice(idx + 1).trim());
+      } catch {
+        return part.slice(idx + 1).trim();
+      }
+    }
+  }
+  return null;
+}
+
 export const requireAuth = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  let token: string | null = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.slice('Bearer '.length).trim();
+  } else {
+    token = readCookie(req, 'shift_session');
+  }
+
+  if (!token) {
     return res.status(401).json({ error: 'Unauthorized: Missing token' });
   }
 
-  const token = authHeader.slice('Bearer '.length).trim();
-
-  // 1. Check Shift Email/Password, Email OTP, or Mobile SMS OTP signed session token
+  // 1. Check Shift signed session token (Email/Password or Email OTP)
   if (token.startsWith('shift.')) {
     const payload = verifyShiftToken(token);
     if (!payload) {
