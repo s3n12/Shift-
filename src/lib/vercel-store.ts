@@ -3,7 +3,7 @@ import type { HabitItem, PackingItem, TaskItem, TripItem, UserProfile } from '..
 interface StoredAccount {
   id: number;
   uid: string;
-  email: string;
+  email: string | null;
   phone: string | null;
   displayName: string;
   passwordSalt: string | null;
@@ -479,6 +479,41 @@ export const vercelStore = {
       token: makeLocalToken(account.uid),
       user: toUserProfile(account),
     };
+  },
+
+  syncVerifiedOtpUser(profile: UserProfile) {
+    if (typeof window === 'undefined' || (!profile.email && !profile.phone)) return;
+    const db = loadDb();
+    const normalizedEmail = profile.email ? profile.email.trim().toLowerCase() : null;
+    const normalizedPhone = profile.phone ? profile.phone.trim() : null;
+    let account = db.users.find(
+      (u) =>
+        u.uid === profile.uid ||
+        (normalizedEmail !== null && u.email === normalizedEmail) ||
+        (normalizedPhone !== null && u.phone === normalizedPhone)
+    );
+    if (!account) {
+      account = {
+        id: db.nextUserId++,
+        uid: profile.uid,
+        email: normalizedEmail,
+        phone: normalizedPhone,
+        displayName:
+          profile.displayName?.trim() ||
+          normalizedPhone ||
+          (normalizedEmail ? normalizedEmail.split('@')[0] : 'Shift Member'),
+        passwordSalt: null,
+        passwordHash: null,
+        authProvider: profile.authProvider || (normalizedPhone ? 'phone-otp' : 'email-otp'),
+        createdAt: new Date().toISOString(),
+      };
+      db.users.push(account);
+      seedStarterData(db, account.id);
+    } else if (profile.displayName?.trim() && !account.displayName) {
+      account.displayName = profile.displayName.trim();
+    }
+    db.activeUid = account.uid;
+    saveDb(db);
   },
 
   async logout() {

@@ -35,6 +35,34 @@ function buildOtpEmailContent(code: string, purpose: 'login' | 'signup' | 'otp')
   return { subject, text, html };
 }
 
+function parseResendError(status: number, rawBody: string): string {
+  try {
+    const parsed = JSON.parse(rawBody) as { message?: string; name?: string };
+    if (parsed.message && typeof parsed.message === 'string') {
+      if (status === 401 || status === 403) {
+        return `Email delivery failed: ${parsed.message}`;
+      }
+      if (status === 422) {
+        return `Email delivery rejected: ${parsed.message}`;
+      }
+      if (status === 429) {
+        return 'Too many verification emails requested. Please wait a moment and try again.';
+      }
+      return `Could not send verification email: ${parsed.message}`;
+    }
+  } catch {
+    // Non-JSON error body
+  }
+
+  if (status === 401 || status === 403) {
+    return 'Email delivery failed. Please verify your RESEND_API_KEY and RESEND_FROM_EMAIL settings.';
+  }
+  if (status === 429) {
+    return 'Too many verification emails requested. Please wait a moment and try again.';
+  }
+  return 'Could not deliver the verification email right now. Please try again.';
+}
+
 export async function sendOtpEmail(
   toEmail: string,
   code: string,
@@ -45,35 +73,43 @@ export async function sendOtpEmail(
   const smtpUser = process.env.SMTP_USER?.trim();
   const smtpPass = process.env.SMTP_PASS?.trim();
   const fromAddress =
+    process.env.RESEND_FROM_EMAIL?.trim() ||
     process.env.EMAIL_FROM?.trim() ||
     smtpUser ||
-    'Shift <onboarding@resend.dev>';
+    'onboarding@resend.dev';
 
   const { subject, text, html } = buildOtpEmailContent(code, purpose);
 
   if (resendKey) {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${resendKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: fromAddress,
-        to: [toEmail],
-        subject,
-        text,
-        html,
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: fromAddress,
+          to: [toEmail],
+          subject,
+          text,
+          html,
+        }),
+      });
+    } catch (err) {
+      console.error('Resend network error:', err);
+      throw new Error(
+        'Could not reach the email delivery service. Please try again in a moment.'
+      );
+    }
 
     if (!response.ok) {
       const errBody = await response.text().catch(() => '');
       console.error('Resend OTP delivery failed:', response.status, errBody);
-      throw new Error(
-        'Could not deliver verification email. Check your RESEND_API_KEY and sender settings.'
-      );
+      throw new Error(parseResendError(response.status, errBody));
     }
+
     return { delivered: 'email' };
   }
 

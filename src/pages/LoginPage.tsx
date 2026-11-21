@@ -8,6 +8,7 @@ import {
   Lock,
   Mail,
   ShieldCheck,
+  Smartphone,
   User,
 } from 'lucide-react';
 import { api } from '../lib/api.ts';
@@ -15,21 +16,23 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { LOGIN_HERO_IMAGE } from '../types.ts';
 import { MediaImage } from '../components/MediaImage.tsx';
 
-type AuthMode = 'login' | 'signup' | 'otp';
+type AuthMode = 'login' | 'signup' | 'otp' | 'phone';
 
 export function LoginPage() {
   const { loginWithGoogle, completeEmailOtpLogin, authError, clearAuthError } =
     useAuth();
 
   const [authMode, setAuthMode] = useState<AuthMode>('login');
-  const [otpStep, setOtpStep] = useState<'email' | 'verify'>('email');
+  const [otpStep, setOtpStep] = useState<'input' | 'verify'>('input');
   const [email, setEmail] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [otpInput, setOtpInput] = useState('');
+  const [otpToken, setOtpToken] = useState<string | null>(null);
   const [maskedTarget, setMaskedTarget] = useState('');
-  const [deliveredMode, setDeliveredMode] = useState<'email' | 'preview'>('preview');
+  const [deliveredMode, setDeliveredMode] = useState<'email' | 'sms' | 'preview'>('email');
   const [deliveredCode, setDeliveredCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
@@ -39,8 +42,9 @@ export function LoginPage() {
 
   const switchMode = (next: AuthMode) => {
     setAuthMode(next);
-    setOtpStep('email');
+    setOtpStep('input');
     setOtpInput('');
+    setOtpToken(null);
     setDeliveredCode(null);
     setLocalError(null);
     clearAuthError();
@@ -68,11 +72,38 @@ export function LoginPage() {
         return;
       }
 
+      if (authMode === 'phone') {
+        const cleanDigits = phoneNumber.replace(/\D/g, '');
+        if (cleanDigits.length !== 10) {
+          setLocalError('Please enter a valid 10-digit mobile number.');
+          return;
+        }
+        const res = await api.requestOtp({
+          channel: 'phone',
+          phone: `+91${cleanDigits}`,
+        });
+        setMaskedTarget(res.maskedTarget);
+        setDeliveredMode(res.delivered);
+        setOtpToken(res.otpToken ?? null);
+        setDeliveredCode(
+          res.delivered === 'preview' ? (res.verificationCode ?? null) : null
+        );
+        setOtpInput('');
+        setOtpStep('verify');
+        return;
+      }
+
       // Email OTP mode
-      const res = await api.requestOtp({ email: email.trim() });
+      const res = await api.requestOtp({
+        channel: 'email',
+        email: email.trim(),
+      });
       setMaskedTarget(res.maskedTarget);
       setDeliveredMode(res.delivered);
-      setDeliveredCode(res.verificationCode ?? null);
+      setOtpToken(res.otpToken ?? null);
+      setDeliveredCode(
+        res.delivered === 'preview' ? (res.verificationCode ?? null) : null
+      );
       setOtpInput('');
       setOtpStep('verify');
     } catch (err: unknown) {
@@ -90,10 +121,20 @@ export function LoginPage() {
     clearAuthError();
     setBusy(true);
     try {
-      const res = await api.verifyOtp({
-        email: email.trim(),
-        code: otpInput.trim(),
-      });
+      const res =
+        authMode === 'phone'
+          ? await api.verifyOtp({
+              channel: 'phone',
+              phone: `+91${phoneNumber.replace(/\D/g, '')}`,
+              code: otpInput.trim(),
+              otpToken: otpToken ?? undefined,
+            })
+          : await api.verifyOtp({
+              channel: 'email',
+              email: email.trim(),
+              code: otpInput.trim(),
+              otpToken: otpToken ?? undefined,
+            });
       completeEmailOtpLogin(res.token, res.user);
     } catch (err: unknown) {
       setLocalError(
@@ -108,10 +149,22 @@ export function LoginPage() {
     setLocalError(null);
     setBusy(true);
     try {
-      const res = await api.requestOtp({ email: email.trim() });
+      const res =
+        authMode === 'phone'
+          ? await api.requestOtp({
+              channel: 'phone',
+              phone: `+91${phoneNumber.replace(/\D/g, '')}`,
+            })
+          : await api.requestOtp({
+              channel: 'email',
+              email: email.trim(),
+            });
       setMaskedTarget(res.maskedTarget);
       setDeliveredMode(res.delivered);
-      setDeliveredCode(res.verificationCode ?? null);
+      setOtpToken(res.otpToken ?? null);
+      setDeliveredCode(
+        res.delivered === 'preview' ? (res.verificationCode ?? null) : null
+      );
       setOtpInput('');
     } catch (err: unknown) {
       setLocalError(
@@ -134,11 +187,13 @@ export function LoginPage() {
     }
   };
 
-  const isOtpVerifyView = authMode === 'otp' && otpStep === 'verify';
+  const isOtpVerifyView =
+    (authMode === 'otp' || authMode === 'phone') && otpStep === 'verify';
+  const isPhoneOtp = authMode === 'phone';
 
   return (
     <div className="min-h-screen bg-[#FAF8F5] grid grid-cols-1 lg:grid-cols-2 items-stretch">
-      {/* Left Side: Sign In, Sign Up, Email OTP + Login with Google */}
+      {/* Left Side: Sign In, Sign Up, Email OTP, Phone OTP + Login with Google */}
       <div className="flex flex-col justify-between px-6 py-8 sm:px-12 lg:px-16 xl:px-20">
         <div className="flex items-center justify-between">
           <span className="font-display text-2xl font-semibold tracking-tight text-[#1E293B]">
@@ -155,21 +210,22 @@ export function LoginPage() {
               Work with clarity. Unwind without guilt.
             </h1>
             <p className="mt-3 text-[15px] text-[#5C6672] leading-relaxed">
-              Sign in with your email and password, a 6-digit Email OTP, or Google to manage weekday priorities and weekend rituals.
+              Sign in with your email and password, Email OTP, Phone OTP, or Google to manage weekday priorities and weekend rituals.
             </p>
           </div>
 
-          {/* 3-option Auth Method Selector */}
+          {/* 4-option Auth Method Selector */}
           <div
             role="tablist"
             aria-label="Sign in method"
-            className="grid grid-cols-3 gap-1 p-1 mb-6 rounded-full bg-[#EFEAE2] border border-[#E3DBD0]"
+            className="grid grid-cols-4 gap-1 p-1 mb-6 rounded-full bg-[#EFEAE2] border border-[#E3DBD0]"
           >
             {(
               [
                 { id: 'login', label: 'Sign In' },
                 { id: 'signup', label: 'Sign Up' },
                 { id: 'otp', label: 'Email OTP' },
+                { id: 'phone', label: 'Phone OTP' },
               ] as const
             ).map((tab) => {
               const active = authMode === tab.id;
@@ -180,7 +236,7 @@ export function LoginPage() {
                   role="tab"
                   aria-selected={active}
                   onClick={() => switchMode(tab.id)}
-                  className={`py-2 px-3 rounded-full text-xs font-medium whitespace-nowrap transition-all duration-200 cursor-pointer ${
+                  className={`py-2 px-2 sm:px-3 rounded-full text-xs font-medium whitespace-nowrap transition-all duration-200 cursor-pointer ${
                     active
                       ? 'bg-[#1E293B] text-white shadow-sm'
                       : 'text-[#5C6672] hover:text-[#1E293B]'
@@ -228,32 +284,67 @@ export function LoginPage() {
                 </div>
               )}
 
-              <div>
-                <label
-                  htmlFor="shift-email"
-                  className="block text-xs font-medium text-[#475569] mb-1.5"
-                >
-                  Email address
-                </label>
-                <div className="relative">
-                  <Mail
-                    className="w-4 h-4 text-[#8C95A0] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"
-                    strokeWidth={1.8}
-                  />
-                  <input
-                    id="shift-email"
-                    type="email"
-                    required
-                    autoComplete="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@example.com"
-                    className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white border border-[#E3DBD0] text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#1E293B] focus:ring-2 focus:ring-[#1E293B]/10 transition"
-                  />
+              {authMode === 'phone' ? (
+                <div>
+                  <label
+                    htmlFor="shift-phone"
+                    className="block text-xs font-medium text-[#475569] mb-1.5"
+                  >
+                    Mobile number
+                  </label>
+                  <div className="flex items-center rounded-2xl bg-white border border-[#E3DBD0] focus-within:border-[#1E293B] focus-within:ring-2 focus-within:ring-[#1E293B]/10 transition overflow-hidden">
+                    <div className="inline-flex items-center gap-2 pl-4 pr-3 py-3 border-r border-[#EFEAE2] text-sm font-medium text-[#1E293B] select-none shrink-0 bg-[#FAF8F5]/60">
+                      <Smartphone
+                        className="w-4 h-4 text-[#8C95A0]"
+                        strokeWidth={1.8}
+                      />
+                      <span className="font-mono text-[13px]">+91</span>
+                    </div>
+                    <input
+                      id="shift-phone"
+                      type="tel"
+                      inputMode="numeric"
+                      pattern="[0-9]{10}"
+                      maxLength={10}
+                      required
+                      autoComplete="tel-national"
+                      value={phoneNumber}
+                      onChange={(e) =>
+                        setPhoneNumber(e.target.value.replace(/\D/g, '').slice(0, 10))
+                      }
+                      placeholder="9876543210"
+                      className="w-full px-3.5 py-3 bg-transparent text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none tabular-nums"
+                    />
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div>
+                  <label
+                    htmlFor="shift-email"
+                    className="block text-xs font-medium text-[#475569] mb-1.5"
+                  >
+                    Email address
+                  </label>
+                  <div className="relative">
+                    <Mail
+                      className="w-4 h-4 text-[#8C95A0] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"
+                      strokeWidth={1.8}
+                    />
+                    <input
+                      id="shift-email"
+                      type="email"
+                      required
+                      autoComplete="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white border border-[#E3DBD0] text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#1E293B] focus:ring-2 focus:ring-[#1E293B]/10 transition"
+                    />
+                  </div>
+                </div>
+              )}
 
-              {authMode !== 'otp' && (
+              {(authMode === 'login' || authMode === 'signup') && (
                 <div>
                   <label
                     htmlFor="shift-password"
@@ -304,7 +395,7 @@ export function LoginPage() {
                 disabled={busy}
                 className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-full bg-[#1E293B] text-white text-sm font-medium hover:bg-[#0F172A] active:scale-[0.99] transition-all duration-200 disabled:opacity-60 cursor-pointer"
               >
-                {authMode === 'otp' && (
+                {(authMode === 'otp' || authMode === 'phone') && (
                   <ShieldCheck className="w-4 h-4 shrink-0" strokeWidth={1.9} />
                 )}
                 <span>
@@ -318,7 +409,9 @@ export function LoginPage() {
                       ? 'Sign In to Shift'
                       : authMode === 'signup'
                         ? 'Create Account'
-                        : 'Send 6-Digit Email OTP'}
+                        : authMode === 'phone'
+                          ? 'Send 6-Digit Phone OTP'
+                          : 'Send 6-Digit Email OTP'}
                 </span>
                 <ArrowRight className="w-4 h-4 shrink-0" strokeWidth={1.9} />
               </button>
@@ -336,13 +429,31 @@ export function LoginPage() {
                       Enter Verification Code
                     </p>
                     <p className="text-[#5C6672] mt-0.5 text-xs leading-relaxed">
-                      {deliveredMode === 'email' ? (
+                      {isPhoneOtp ? (
+                        deliveredMode === 'sms' ? (
+                          <>
+                            We sent a 6-digit SMS verification code to{' '}
+                            <span className="font-medium text-[#1E293B]">
+                              {maskedTarget}
+                            </span>
+                            . Enter it below within 5 minutes.
+                          </>
+                        ) : (
+                          <>
+                            Enter the 6-digit verification code generated for{' '}
+                            <span className="font-medium text-[#1E293B]">
+                              {maskedTarget}
+                            </span>
+                            . It expires in 5 minutes.
+                          </>
+                        )
+                      ) : deliveredMode === 'email' ? (
                         <>
                           We emailed a 6-digit verification code to{' '}
                           <span className="font-medium text-[#1E293B]">
                             {maskedTarget}
                           </span>
-                          .
+                          . Enter it below within 10 minutes.
                         </>
                       ) : (
                         <>
@@ -358,7 +469,7 @@ export function LoginPage() {
                       <div className="mt-2.5 pt-2.5 border-t border-[#EFEAE2] space-y-1.5">
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-xs text-[#64748B]">
-                            Your 6-digit code:{' '}
+                            Verification code:{' '}
                             <strong className="font-mono text-sm tracking-widest text-[#4A6B5D]">
                               {deliveredCode}
                             </strong>
@@ -372,7 +483,9 @@ export function LoginPage() {
                           </button>
                         </div>
                         <p className="text-[11px] text-[#94A3B8]">
-                          Add RESEND_API_KEY or SMTP_* in Secrets to deliver real emails.
+                          {isPhoneOtp
+                            ? 'Add FAST2SMS_API_KEY in Secrets to deliver real SMS.'
+                            : 'Set RESEND_API_KEY in environment variables to send real OTP emails.'}
                         </p>
                       </div>
                     )}
@@ -416,8 +529,10 @@ export function LoginPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    setOtpStep('email');
+                    setOtpStep('input');
                     setOtpInput('');
+                    setOtpToken(null);
+                    setDeliveredCode(null);
                     setLocalError(null);
                   }}
                   className="inline-flex items-center gap-1 text-[#64748B] hover:text-[#1E293B] cursor-pointer"

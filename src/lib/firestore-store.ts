@@ -5,12 +5,14 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
   Timestamp,
   updateDoc,
   where,
+  type Unsubscribe,
 } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from './firebase.ts';
 import type {
@@ -775,5 +777,125 @@ export const firestoreStore = {
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
+  },
+
+  // --- REAL-TIME SUBSCRIPTIONS (onSnapshot) ---
+  subscribeTasks(
+    uid: string,
+    onData: (tasks: TaskItem[]) => void,
+    onError: (err: Error) => void
+  ): Unsubscribe {
+    const path = `users/${uid}/tasks`;
+    return onSnapshot(
+      query(collection(db, path), where('ownerUid', '==', uid)),
+      (snap) => {
+        const items: TaskItem[] = snap.docs
+          .map((d) => {
+            const data = d.data();
+            return {
+              id: Number(data.id),
+              userId: 1,
+              title: String(data.title || ''),
+              isCompleted: Boolean(data.isCompleted),
+              mode: String(data.mode || 'work'),
+              notes: data.notes ? String(data.notes) : null,
+              createdAt: timestampToIso(data.createdAt),
+            };
+          })
+          .sort((a, b) => {
+            if (a.isCompleted !== b.isCompleted) return a.isCompleted ? 1 : -1;
+            return b.createdAt.localeCompare(a.createdAt);
+          });
+        onData(items);
+      },
+      (error) => {
+        try {
+          handleFirestoreError(error, OperationType.LIST, path);
+        } catch (wrapped) {
+          onError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+        }
+      }
+    );
+  },
+
+  subscribeHabits(
+    uid: string,
+    onData: (habits: HabitItem[]) => void,
+    onError: (err: Error) => void
+  ): Unsubscribe {
+    const path = `users/${uid}/habits`;
+    return onSnapshot(
+      query(collection(db, path), where('ownerUid', '==', uid)),
+      (snap) => {
+        const today = new Date().toISOString().slice(0, 10);
+        const items: HabitItem[] = snap.docs
+          .map((d) => {
+            const data = d.data();
+            const lastDate = data.lastCompletedDate
+              ? String(data.lastCompletedDate)
+              : null;
+            return {
+              id: Number(data.id),
+              userId: 1,
+              title: String(data.title || ''),
+              category: String(data.category || 'wellness'),
+              streakCount: Number(data.streakCount || 0),
+              completedToday:
+                lastDate === today ? Boolean(data.completedToday) : false,
+              lastCompletedDate: lastDate,
+              targetMinutes:
+                typeof data.targetMinutes === 'number' ? data.targetMinutes : null,
+              createdAt: timestampToIso(data.createdAt),
+            };
+          })
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        onData(items);
+      },
+      (error) => {
+        try {
+          handleFirestoreError(error, OperationType.LIST, path);
+        } catch (wrapped) {
+          onError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+        }
+      }
+    );
+  },
+
+  subscribeTrips(
+    uid: string,
+    onData: (trips: TripItem[]) => void,
+    onError: (err: Error) => void
+  ): Unsubscribe {
+    const path = `users/${uid}/trips`;
+    return onSnapshot(
+      query(collection(db, path), where('ownerUid', '==', uid)),
+      (snap) => {
+        const items: TripItem[] = snap.docs
+          .map((d) => {
+            const data = d.data();
+            return {
+              id: Number(data.id),
+              userId: 1,
+              destination: String(data.destination || ''),
+              subtitle: data.subtitle ? String(data.subtitle) : null,
+              travelDate: String(data.travelDate || ''),
+              coverKey: String(data.coverKey || 'kyoto'),
+              packingList: Array.isArray(data.packingList)
+                ? (data.packingList as PackingItem[])
+                : [],
+              createdAt: timestampToIso(data.createdAt),
+            };
+          })
+          .sort((a, b) => a.travelDate.localeCompare(b.travelDate));
+        onData(items);
+      },
+      (error) => {
+        try {
+          handleFirestoreError(error, OperationType.LIST, path);
+        } catch (wrapped) {
+          onError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+        }
+      }
+    );
   },
 };

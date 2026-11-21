@@ -124,7 +124,7 @@ function ShiftWorkspace() {
         mode: 'work',
         notes,
       });
-      setTasks((prev) => [task, ...prev]);
+      setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [task, ...prev]));
     } catch (err: unknown) {
       setDataError(err instanceof Error ? err.message : 'Could not add task.');
     }
@@ -180,7 +180,7 @@ function ShiftWorkspace() {
         category,
         targetMinutes,
       });
-      setHabits((prev) => [...prev, habit]);
+      setHabits((prev) => (prev.some((h) => h.id === habit.id) ? prev : [...prev, habit]));
     } catch (err: unknown) {
       setDataError(err instanceof Error ? err.message : 'Could not add habit.');
     }
@@ -234,7 +234,7 @@ function ShiftWorkspace() {
       const token = await getToken();
       if (!token) return;
       const { trip } = await api.createTrip(token, data);
-      setTrips((prev) => [...prev, trip]);
+      setTrips((prev) => (prev.some((t) => t.id === trip.id) ? prev : [...prev, trip]));
     } catch (err: unknown) {
       setDataError(err instanceof Error ? err.message : 'Could not save trip.');
     }

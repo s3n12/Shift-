@@ -343,12 +343,14 @@ export async function createOtpCode(params: {
   phone?: string | null;
   code: string;
   purpose: string;
+  ttlMs?: number;
 }) {
   if (!db) {
     return fileRepository.createOtpCode(params);
   }
   try {
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    const ttlMs = params.ttlMs ?? 10 * 60 * 1000;
+    const expiresAt = new Date(Date.now() + ttlMs);
     await db.insert(otpCodes).values({
       channel: params.channel,
       email: params.email ? params.email.trim().toLowerCase() : null,

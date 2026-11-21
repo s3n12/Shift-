@@ -421,9 +421,11 @@ export const fileRepository = {
     phone?: string | null;
     code: string;
     purpose: string;
+    ttlMs?: number;
   }): Promise<void> {
     const store = loadStore();
     const now = Date.now();
+    const ttlMs = params.ttlMs ?? 10 * 60 * 1000;
     store.otpCodes.push({
       id: store.nextOtpId++,
       channel: params.channel,
@@ -431,7 +433,7 @@ export const fileRepository = {
       phone: params.phone ?? null,
       code: params.code,
       purpose: params.purpose,
-      expiresAt: new Date(now + 10 * 60 * 1000).toISOString(),
+      expiresAt: new Date(now + ttlMs).toISOString(),
       consumed: false,
       createdAt: new Date(now).toISOString(),
     });

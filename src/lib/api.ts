@@ -18,9 +18,13 @@ function isFirestoreToken(token: string | null | undefined): boolean {
 async function apiFetch<T>(
   path: string,
   token: string | null,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  { allowStandaloneBypass = true }: { allowStandaloneBypass?: boolean } = {}
 ): Promise<T> {
-  if (useStandaloneStore || (token && token.startsWith('local.'))) {
+  if (
+    allowStandaloneBypass &&
+    (useStandaloneStore || (token && token.startsWith('local.')))
+  ) {
     throw new BackendUnavailableError();
   }
 
@@ -40,19 +44,32 @@ async function apiFetch<T>(
       headers,
     });
   } catch {
+    if (!allowStandaloneBypass) {
+      throw new Error('Could not reach the verification service. Please try again.');
+    }
     useStandaloneStore = true;
     throw new BackendUnavailableError();
   }
 
   const contentType = (response.headers.get('content-type') || '').toLowerCase();
   if (!contentType.includes('application/json')) {
-    // Static hosts (e.g. Vercel Vite deployment) return HTML/404/405 for /api/*
+    if (!allowStandaloneBypass) {
+      throw new Error(
+        response.status >= 500
+          ? 'Email delivery service encountered an error. Please try again.'
+          : 'Verification endpoint is unavailable. Please check your deployment settings.'
+      );
+    }
+    // Static hosts without serverless endpoints return HTML/404/405 for /api/*
     useStandaloneStore = true;
     throw new BackendUnavailableError();
   }
 
   const data = await response.json().catch(() => null);
   if (data === null) {
+    if (!allowStandaloneBypass) {
+      throw new Error('Received an invalid response from the verification service.');
+    }
     useStandaloneStore = true;
     throw new BackendUnavailableError();
   }
@@ -100,36 +117,56 @@ export const api = {
     );
   },
 
-  requestOtp(body: { email: string; displayName?: string }) {
-    return withFallback(
-      () =>
-        apiFetch<{
-          ok: boolean;
-          channel: 'email';
-          delivered: 'email' | 'preview';
-          maskedTarget: string;
-          verificationCode?: string;
-          displayName: string | null;
-        }>('/api/auth/request-otp', null, {
-          method: 'POST',
-          body: JSON.stringify(body),
-        }),
-      () => vercelStore.requestOtp(body)
+  requestOtp(
+    body:
+      | { channel?: 'email'; email: string; displayName?: string }
+      | { channel: 'phone'; phone: string; displayName?: string }
+  ) {
+    return apiFetch<{
+      ok: boolean;
+      channel: 'email' | 'phone';
+      delivered: 'email' | 'sms' | 'preview';
+      maskedTarget: string;
+      otpToken?: string;
+      expiresInSeconds?: number;
+      verificationCode?: string;
+      displayName: string | null;
+    }>(
+      '/api/auth/request-otp',
+      null,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+      { allowStandaloneBypass: false }
     );
   },
 
-  verifyOtp(body: { email: string; code: string; displayName?: string }) {
-    return withFallback(
-      () =>
-        apiFetch<{ token: string; user: UserProfile }>(
-          '/api/auth/verify-otp',
-          null,
-          {
-            method: 'POST',
-            body: JSON.stringify(body),
-          }
-        ),
-      () => vercelStore.verifyOtp(body)
+  verifyOtp(
+    body:
+      | {
+          channel?: 'email';
+          email: string;
+          code: string;
+          otpToken?: string;
+          displayName?: string;
+        }
+      | {
+          channel: 'phone';
+          phone: string;
+          code: string;
+          otpToken?: string;
+          displayName?: string;
+        }
+  ) {
+    return apiFetch<{ token: string; user: UserProfile }>(
+      '/api/auth/verify-otp',
+      null,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+      { allowStandaloneBypass: false }
     );
   },
 

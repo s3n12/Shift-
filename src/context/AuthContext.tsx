@@ -11,6 +11,7 @@ import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebas
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
 import { FIRESTORE_SESSION_TOKEN, firestoreStore } from '../lib/firestore-store.ts';
 import { api } from '../lib/api.ts';
+import { vercelStore } from '../lib/vercel-store.ts';
 import type { UserProfile } from '../types.ts';
 
 interface AuthContextValue {
@@ -135,6 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (token: string, profile: UserProfile) => {
       tokenRef.current = token;
       isEmailSessionRef.current = true;
+      vercelStore.syncVerifiedOtpUser(profile);
       setAuthError(null);
       setUser(profile);
     },
