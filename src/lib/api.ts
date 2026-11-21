@@ -1,5 +1,6 @@
 import type { HabitItem, PackingItem, TaskItem, TripItem, UserProfile } from '../types.ts';
 import { FIRESTORE_SESSION_TOKEN, firestoreStore } from './firestore-store.ts';
+import { SUPABASE_SESSION_TOKEN, supabaseStore } from './supabase-store.ts';
 import { vercelStore } from './vercel-store.ts';
 
 class BackendUnavailableError extends Error {
@@ -15,12 +16,20 @@ function isFirestoreToken(token: string | null | undefined): boolean {
   return token === FIRESTORE_SESSION_TOKEN;
 }
 
+function isSupabaseToken(token: string | null | undefined): boolean {
+  return token === SUPABASE_SESSION_TOKEN;
+}
+
 async function apiFetch<T>(
   path: string,
   token: string | null,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  { allowStandaloneBypass = true }: { allowStandaloneBypass?: boolean } = {}
 ): Promise<T> {
-  if (useStandaloneStore || (token && token.startsWith('local.'))) {
+  if (
+    allowStandaloneBypass &&
+    (useStandaloneStore || (token && token.startsWith('local.')))
+  ) {
     throw new BackendUnavailableError();
   }
 
@@ -40,12 +49,18 @@ async function apiFetch<T>(
       headers,
     });
   } catch {
+    if (!allowStandaloneBypass) {
+      throw new Error('Could not reach the email verification service. Please try again.');
+    }
     useStandaloneStore = true;
     throw new BackendUnavailableError();
   }
 
   const contentType = (response.headers.get('content-type') || '').toLowerCase();
   if (!contentType.includes('application/json')) {
+    if (!allowStandaloneBypass) {
+      throw new Error('Email verification endpoint is unavailable. Please check your server configuration.');
+    }
     // Static hosts without serverless endpoints return HTML/404/405 for /api/*
     useStandaloneStore = true;
     throw new BackendUnavailableError();
@@ -53,6 +68,9 @@ async function apiFetch<T>(
 
   const data = await response.json().catch(() => null);
   if (data === null) {
+    if (!allowStandaloneBypass) {
+      throw new Error('Received an invalid response from the email verification service.');
+    }
     useStandaloneStore = true;
     throw new BackendUnavailableError();
   }
@@ -100,32 +118,26 @@ export const api = {
     );
   },
 
-  requestOtp(body: { email: string; displayName?: string }) {
+  exchangeSupabaseSession(
+    accessToken: string,
+    verifiedUser: {
+      id: string;
+      email: string | null;
+      phone: string | null;
+      displayName: string | null;
+    }
+  ) {
     return withFallback(
       () =>
-        apiFetch<{
-          ok: boolean;
-          channel: 'email';
-          delivered: 'email' | 'preview';
-          maskedTarget: string;
-          verificationCode?: string;
-          displayName: string | null;
-        }>('/api/auth/request-otp', null, {
-          method: 'POST',
-          body: JSON.stringify(body),
-        }),
-      () => vercelStore.requestOtp(body)
-    );
-  },
-
-  verifyOtp(body: { email: string; code: string; displayName?: string }) {
-    return withFallback(
-      () =>
-        apiFetch<{ token: string; user: UserProfile }>('/api/auth/verify-otp', null, {
-          method: 'POST',
-          body: JSON.stringify(body),
-        }),
-      () => vercelStore.verifyOtp(body)
+        apiFetch<{ token: string; user: UserProfile }>(
+          '/api/auth/supabase-session',
+          accessToken,
+          {
+            method: 'POST',
+            body: JSON.stringify({}),
+          }
+        ),
+      () => vercelStore.syncSupabaseUser(verifiedUser)
     );
   },
 
@@ -158,6 +170,7 @@ export const api = {
 
   // Tasks
   listTasks(token: string) {
+    if (isSupabaseToken(token)) return supabaseStore.listTasks();
     if (isFirestoreToken(token)) return firestoreStore.listTasks();
     return withFallback(
       () => apiFetch<{ tasks: TaskItem[] }>('/api/tasks', token),
@@ -165,6 +178,7 @@ export const api = {
     );
   },
   createTask(token: string, body: { title: string; mode?: string; notes?: string }) {
+    if (isSupabaseToken(token)) return supabaseStore.createTask(body);
     if (isFirestoreToken(token)) return firestoreStore.createTask(body);
     return withFallback(
       () =>
@@ -180,6 +194,7 @@ export const api = {
     id: number,
     body: { title?: string; isCompleted?: boolean; notes?: string | null; mode?: string }
   ) {
+    if (isSupabaseToken(token)) return supabaseStore.updateTask(id, body);
     if (isFirestoreToken(token)) return firestoreStore.updateTask(id, body);
     return withFallback(
       () =>
@@ -191,6 +206,7 @@ export const api = {
     );
   },
   deleteTask(token: string, id: number) {
+    if (isSupabaseToken(token)) return supabaseStore.deleteTask(id);
     if (isFirestoreToken(token)) return firestoreStore.deleteTask(id);
     return withFallback(
       () =>
@@ -203,6 +219,7 @@ export const api = {
 
   // Habits
   listHabits(token: string) {
+    if (isSupabaseToken(token)) return supabaseStore.listHabits();
     if (isFirestoreToken(token)) return firestoreStore.listHabits();
     return withFallback(
       () => apiFetch<{ habits: HabitItem[] }>('/api/habits', token),
@@ -213,6 +230,7 @@ export const api = {
     token: string,
     body: { title: string; category?: string; targetMinutes?: number | null }
   ) {
+    if (isSupabaseToken(token)) return supabaseStore.createHabit(body);
     if (isFirestoreToken(token)) return firestoreStore.createHabit(body);
     return withFallback(
       () =>
@@ -224,6 +242,7 @@ export const api = {
     );
   },
   toggleHabit(token: string, id: number) {
+    if (isSupabaseToken(token)) return supabaseStore.toggleHabit(id);
     if (isFirestoreToken(token)) return firestoreStore.toggleHabit(id);
     return withFallback(
       () =>
@@ -234,6 +253,7 @@ export const api = {
     );
   },
   deleteHabit(token: string, id: number) {
+    if (isSupabaseToken(token)) return supabaseStore.deleteHabit(id);
     if (isFirestoreToken(token)) return firestoreStore.deleteHabit(id);
     return withFallback(
       () =>
@@ -246,6 +266,7 @@ export const api = {
 
   // Trips
   listTrips(token: string) {
+    if (isSupabaseToken(token)) return supabaseStore.listTrips();
     if (isFirestoreToken(token)) return firestoreStore.listTrips();
     return withFallback(
       () => apiFetch<{ trips: TripItem[] }>('/api/trips', token),
@@ -262,6 +283,7 @@ export const api = {
       packingList: PackingItem[];
     }
   ) {
+    if (isSupabaseToken(token)) return supabaseStore.createTrip(body);
     if (isFirestoreToken(token)) return firestoreStore.createTrip(body);
     return withFallback(
       () =>
@@ -283,6 +305,7 @@ export const api = {
       packingList?: PackingItem[];
     }
   ) {
+    if (isSupabaseToken(token)) return supabaseStore.updateTrip(id, body);
     if (isFirestoreToken(token)) return firestoreStore.updateTrip(id, body);
     return withFallback(
       () =>
@@ -294,6 +317,7 @@ export const api = {
     );
   },
   deleteTrip(token: string, id: number) {
+    if (isSupabaseToken(token)) return supabaseStore.deleteTrip(id);
     if (isFirestoreToken(token)) return firestoreStore.deleteTrip(id);
     return withFallback(
       () =>

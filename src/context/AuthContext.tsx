@@ -11,6 +11,8 @@ import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebas
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
 import { FIRESTORE_SESSION_TOKEN, firestoreStore } from '../lib/firestore-store.ts';
 import { api } from '../lib/api.ts';
+import { getActiveSupabaseSession, signOutSupabase } from '../lib/supabase.ts';
+import { SUPABASE_SESSION_TOKEN, supabaseStore } from '../lib/supabase-store.ts';
 import { vercelStore } from '../lib/vercel-store.ts';
 import type { UserProfile } from '../types.ts';
 
@@ -53,7 +55,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (!fbUser) {
-        // Attempt to restore an active email/OTP session (HttpOnly cookie on server or local session)
+        // 1. Check for an active Supabase Auth session (Email OTP / Email & Password)
+        try {
+          const sbSession = await getActiveSupabaseSession();
+          if (active && sbSession) {
+            const synced = await supabaseStore.syncSupabaseUser(sbSession.user);
+            if (!active) return;
+            tokenRef.current = synced.token || SUPABASE_SESSION_TOKEN;
+            isEmailSessionRef.current = true;
+            setUser(synced.user);
+            setAuthError(null);
+            setLoading(false);
+            return;
+          }
+        } catch {
+          // No active Supabase session
+        }
+
+        // 2. Fallback: attempt to restore a legacy server/local session
         try {
           const restored = await api.getMe(null);
           if (!active) return;
@@ -157,6 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error('Error signing out of Firebase:', err);
     }
+    await signOutSupabase();
   }, []);
 
   const clearAuthError = useCallback(() => setAuthError(null), []);

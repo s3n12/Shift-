@@ -11,6 +11,14 @@ import {
   User,
 } from 'lucide-react';
 import { api } from '../lib/api.ts';
+import {
+  isSupabaseConfigured,
+  sendSupabaseEmailOtp,
+  signInWithSupabasePassword,
+  signUpWithSupabasePassword,
+  verifySupabaseEmailOtp,
+} from '../lib/supabase.ts';
+import { supabaseStore } from '../lib/supabase-store.ts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { LOGIN_HERO_IMAGE } from '../types.ts';
 import { MediaImage } from '../components/MediaImage.tsx';
@@ -23,15 +31,17 @@ export function LoginPage() {
 
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [otpStep, setOtpStep] = useState<'email' | 'verify'>('email');
+  const [otpVerifyType, setOtpVerifyType] = useState<'email' | 'signup'>('email');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [otpInput, setOtpInput] = useState('');
   const [maskedTarget, setMaskedTarget] = useState('');
-  const [deliveredMode, setDeliveredMode] = useState<'email' | 'preview'>('preview');
-  const [deliveredCode, setDeliveredCode] = useState<string | null>(null);
+  const [otpEmail, setOtpEmail] = useState('');
   const [busy, setBusy] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resentNotice, setResentNotice] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -40,8 +50,9 @@ export function LoginPage() {
   const switchMode = (next: AuthMode) => {
     setAuthMode(next);
     setOtpStep('email');
+    setOtpVerifyType('email');
     setOtpInput('');
-    setDeliveredCode(null);
+    setResentNotice(false);
     setLocalError(null);
     clearAuthError();
   };
@@ -53,12 +64,47 @@ export function LoginPage() {
     setBusy(true);
     try {
       if (authMode === 'login') {
+        if (await isSupabaseConfigured()) {
+          const authRes = await signInWithSupabasePassword({
+            email: email.trim(),
+            password,
+          });
+          const synced = await supabaseStore.syncSupabaseUser(
+            authRes.user,
+            'supabase-password'
+          );
+          completeEmailOtpLogin(synced.token, synced.user);
+          return;
+        }
         const res = await api.login({ email: email.trim(), password });
         completeEmailOtpLogin(res.token, res.user);
         return;
       }
 
       if (authMode === 'signup') {
+        if (await isSupabaseConfigured()) {
+          const signupRes = await signUpWithSupabasePassword({
+            email: email.trim(),
+            password,
+            displayName: displayName.trim() || undefined,
+          });
+          if (signupRes.needsEmailConfirmation) {
+            setAuthMode('otp');
+            setOtpVerifyType('signup');
+            setOtpEmail(signupRes.target.email);
+            setMaskedTarget(signupRes.target.maskedEmail);
+            setOtpInput('');
+            setResentNotice(false);
+            setOtpStep('verify');
+            return;
+          }
+          const synced = await supabaseStore.syncSupabaseUser(
+            signupRes.user,
+            'supabase-password'
+          );
+          completeEmailOtpLogin(synced.token, synced.user);
+          return;
+        }
         const res = await api.signup({
           email: email.trim(),
           password,
@@ -68,12 +114,13 @@ export function LoginPage() {
         return;
       }
 
-      // Email OTP mode
-      const res = await api.requestOtp({ email: email.trim() });
-      setMaskedTarget(res.maskedTarget);
-      setDeliveredMode(res.delivered);
-      setDeliveredCode(res.verificationCode ?? null);
+      // Supabase Email OTP mode
+      const sent = await sendSupabaseEmailOtp(email);
+      setOtpVerifyType('email');
+      setOtpEmail(sent.email);
+      setMaskedTarget(sent.maskedEmail);
       setOtpInput('');
+      setResentNotice(false);
       setOtpStep('verify');
     } catch (err: unknown) {
       setLocalError(
@@ -90,11 +137,16 @@ export function LoginPage() {
     clearAuthError();
     setBusy(true);
     try {
-      const res = await api.verifyOtp({
-        email: email.trim(),
-        code: otpInput.trim(),
+      const verified = await verifySupabaseEmailOtp({
+        email: otpEmail || email,
+        token: otpInput.trim(),
+        type: otpVerifyType,
       });
-      completeEmailOtpLogin(res.token, res.user);
+      const synced = await supabaseStore.syncSupabaseUser(
+        verified.user,
+        'supabase-otp'
+      );
+      completeEmailOtpLogin(synced.token, synced.user);
     } catch (err: unknown) {
       setLocalError(
         err instanceof Error ? err.message : 'Invalid verification code.'
@@ -106,19 +158,22 @@ export function LoginPage() {
 
   const handleResendOtp = async () => {
     setLocalError(null);
-    setBusy(true);
+    clearAuthError();
+    setResentNotice(false);
+    setResending(true);
     try {
-      const res = await api.requestOtp({ email: email.trim() });
-      setMaskedTarget(res.maskedTarget);
-      setDeliveredMode(res.delivered);
-      setDeliveredCode(res.verificationCode ?? null);
+      const sent = await sendSupabaseEmailOtp(otpEmail || email);
+      setOtpVerifyType('email');
+      setOtpEmail(sent.email);
+      setMaskedTarget(sent.maskedEmail);
       setOtpInput('');
+      setResentNotice(true);
     } catch (err: unknown) {
       setLocalError(
         err instanceof Error ? err.message : 'Could not resend code.'
       );
     } finally {
-      setBusy(false);
+      setResending(false);
     }
   };
 
@@ -336,45 +391,16 @@ export function LoginPage() {
                       Enter Verification Code
                     </p>
                     <p className="text-[#5C6672] mt-0.5 text-xs leading-relaxed">
-                      {deliveredMode === 'email' ? (
-                        <>
-                          We emailed a 6-digit verification code to{' '}
-                          <span className="font-medium text-[#1E293B]">
-                            {maskedTarget}
-                          </span>
-                          .
-                        </>
-                      ) : (
-                        <>
-                          Enter the 6-digit verification code generated for{' '}
-                          <span className="font-medium text-[#1E293B]">
-                            {maskedTarget}
-                          </span>
-                          .
-                        </>
-                      )}
+                      We emailed a 6-digit verification code to{' '}
+                      <span className="font-medium text-[#1E293B]">
+                        {maskedTarget}
+                      </span>
+                      . Enter it below to finish signing in.
                     </p>
-                    {deliveredCode && (
-                      <div className="mt-2.5 pt-2.5 border-t border-[#EFEAE2] space-y-1.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs text-[#64748B]">
-                            Verification code:{' '}
-                            <strong className="font-mono text-sm tracking-widest text-[#4A6B5D]">
-                              {deliveredCode}
-                            </strong>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setOtpInput(deliveredCode)}
-                            className="text-xs font-medium text-[#D97757] hover:text-[#BF6243] whitespace-nowrap cursor-pointer"
-                          >
-                            Fill code
-                          </button>
-                        </div>
-                        <p className="text-[11px] text-[#94A3B8]">
-                          Add RESEND_API_KEY in Secrets to deliver real OTP emails.
-                        </p>
-                      </div>
+                    {resentNotice && (
+                      <p className="text-[#4A6B5D] mt-1.5 text-xs font-medium">
+                        A new verification code was sent to your inbox.
+                      </p>
                     )}
                   </div>
                 </div>
@@ -405,7 +431,7 @@ export function LoginPage() {
 
               <button
                 type="submit"
-                disabled={busy || otpInput.length !== 6}
+                disabled={busy || resending || otpInput.length !== 6}
                 className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-full bg-[#4A6B5D] text-white text-sm font-medium hover:bg-[#3A564A] active:scale-[0.99] transition-all duration-200 disabled:opacity-50 cursor-pointer"
               >
                 <span>{busy ? 'Verifying...' : 'Verify & Open Shift'}</span>
@@ -418,7 +444,7 @@ export function LoginPage() {
                   onClick={() => {
                     setOtpStep('email');
                     setOtpInput('');
-                    setDeliveredCode(null);
+                    setResentNotice(false);
                     setLocalError(null);
                   }}
                   className="inline-flex items-center gap-1 text-[#64748B] hover:text-[#1E293B] cursor-pointer"
@@ -429,10 +455,10 @@ export function LoginPage() {
                 <button
                   type="button"
                   onClick={handleResendOtp}
-                  disabled={busy}
-                  className="font-medium text-[#D97757] hover:text-[#BF6243] cursor-pointer"
+                  disabled={busy || resending}
+                  className="font-medium text-[#D97757] hover:text-[#BF6243] disabled:opacity-50 cursor-pointer"
                 >
-                  Resend code
+                  {resending ? 'Sending...' : 'Resend code'}
                 </button>
               </div>
             </form>

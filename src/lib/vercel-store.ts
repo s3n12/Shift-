@@ -365,83 +365,42 @@ export const vercelStore = {
     };
   },
 
-  async requestOtp(body: { email: string; displayName?: string }) {
-    const email = (body.email || '').trim().toLowerCase();
-    if (!email || !email.includes('@')) {
-      throw new Error('Please enter a valid email address.');
-    }
-
+  async syncSupabaseUser(profile: {
+    id: string;
+    email: string | null;
+    phone: string | null;
+    displayName: string | null;
+  }) {
     const db = loadDb();
-    const existing = db.users.find((u) => u.email === email);
-    const code = generateSixDigitOtp();
-
-    db.otps.push({
-      email,
-      code,
-      expiresAt: Date.now() + 10 * 60 * 1000,
-      consumed: false,
-    });
-    // Keep only recent OTPs
-    db.otps = db.otps.slice(-20);
-    saveDb(db);
-
-    return {
-      ok: true,
-      channel: 'email' as const,
-      delivered: 'preview' as const,
-      maskedTarget: maskEmail(email),
-      verificationCode: code,
-      displayName: body.displayName?.trim() || existing?.displayName || null,
-    };
-  },
-
-  async verifyOtp(body: { email: string; code: string; displayName?: string }) {
-    const email = (body.email || '').trim().toLowerCase();
-    if (!email) {
-      throw new Error('Email address is required.');
-    }
-    const cleanCode = (body.code || '').trim();
-    if (cleanCode.length !== 6) {
-      throw new Error('Please enter the 6-digit verification code.');
-    }
-
-    const db = loadDb();
-    const now = Date.now();
-    const matched = [...db.otps]
-      .reverse()
-      .find(
-        (item) =>
-          item.email === email &&
-          item.code === cleanCode &&
-          !item.consumed &&
-          item.expiresAt > now
-      );
-
-    if (!matched) {
-      throw new Error('Invalid or expired verification code.');
-    }
-    matched.consumed = true;
-
-    let account = db.users.find((u) => u.email === email);
+    const normalizedEmail = profile.email ? profile.email.trim().toLowerCase() : null;
+    const normalizedPhone = profile.phone ? profile.phone.trim() : null;
+    const uid = `supabase:${profile.id}`;
+    let account = db.users.find(
+      (u) =>
+        u.uid === uid ||
+        (normalizedEmail !== null && u.email === normalizedEmail) ||
+        (normalizedPhone !== null && u.phone === normalizedPhone)
+    );
     if (!account) {
       account = {
         id: db.nextUserId++,
-        uid: `email:${randomId()}`,
-        email,
-        phone: null,
-        displayName: body.displayName?.trim() || email.split('@')[0],
+        uid,
+        email: normalizedEmail,
+        phone: normalizedPhone,
+        displayName:
+          profile.displayName?.trim() ||
+          normalizedPhone ||
+          (normalizedEmail ? normalizedEmail.split('@')[0] : 'Shift Member'),
         passwordSalt: null,
         passwordHash: null,
-        authProvider: 'email-otp',
+        authProvider: normalizedPhone && !normalizedEmail ? 'phone-otp' : 'email-otp',
         createdAt: new Date().toISOString(),
       };
       db.users.push(account);
       seedStarterData(db, account.id);
     }
-
     db.activeUid = account.uid;
     saveDb(db);
-
     return {
       token: makeLocalToken(account.uid),
       user: toUserProfile(account),

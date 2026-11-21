@@ -33,7 +33,7 @@
         },
         "authProvider": {
           "type": "string",
-          "enum": ["google", "phone"],
+          "enum": ["google", "phone", "email-link"],
           "description": "Authentication provider for this Firestore profile."
         },
         "createdAt": {

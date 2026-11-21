@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import dotenv from 'dotenv';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,16 +11,20 @@ import {
   signShiftToken,
   verifyPassword,
 } from './src/lib/auth-tokens.ts';
-import { sendOtpEmail } from './src/lib/mailer.ts';
+import {
+  isValidSupabaseUrl,
+  normalizeSupabaseUrl,
+  resolveSupabaseConfig,
+} from './src/lib/supabase-otp.ts';
 import {
   createHabit,
-  createOtpCode,
   createTask,
   createTrip,
   deleteHabit,
   deleteTask,
   deleteTrip,
   findUserByEmail,
+  getOrCreatePhoneUser,
   getOrCreateUser,
   listHabits,
   listTasks,
@@ -26,10 +32,24 @@ import {
   toggleHabitToday,
   updateTask,
   updateTrip,
-  verifyAndConsumeOtp,
 } from './src/db/repository.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const localEnvPath = path.resolve(__dirname, '.env.local');
+if (fs.existsSync(localEnvPath)) {
+  const parsedLocal = dotenv.parse(fs.readFileSync(localEnvPath, 'utf8'));
+  for (const [key, value] of Object.entries(parsedLocal)) {
+    const existing = (process.env[key] || '').trim();
+    const shouldReplace =
+      !existing ||
+      (key.endsWith('_SUPABASE_URL') &&
+        !isValidSupabaseUrl(normalizeSupabaseUrl(existing))) ||
+      (key.includes('SUPABASE_') && key.endsWith('_KEY') && existing.length < 20);
+    if (shouldReplace) {
+      process.env[key] = value;
+    }
+  }
+}
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
@@ -177,95 +197,108 @@ app.post('/api/auth/signup', async (req, res) => {
   }
 });
 
-function maskEmail(email: string): string {
-  const [local, domain] = email.split('@');
-  if (!domain) return email;
-  const visible = local.length <= 2 ? local[0] : `${local.slice(0, 2)}***`;
-  return `${visible}@${domain}`;
+function getServerSupabaseConfig() {
+  return resolveSupabaseConfig({
+    VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL,
+    NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    VITE_SUPABASE_PUBLISHABLE_KEY: process.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY,
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    SUPABASE_PUBLISHABLE_KEY: process.env.SUPABASE_PUBLISHABLE_KEY,
+    SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+  });
 }
 
-app.post('/api/auth/request-otp', async (req, res) => {
-  try {
-    const { email, displayName } = req.body as {
-      email?: string;
-      displayName?: string;
-    };
-
-    const normalizedEmail = (email || '').trim().toLowerCase();
-    if (!normalizedEmail || !normalizedEmail.includes('@')) {
-      return res.status(400).json({ error: 'Please enter a valid email address.' });
-    }
-
-    const existing = await findUserByEmail(normalizedEmail);
-    const code = String(crypto.randomInt(100000, 1000000));
-
-    await createOtpCode({
-      channel: 'email',
-      email: normalizedEmail,
-      code,
-      purpose: 'otp',
-    });
-
-    const delivery = await sendOtpEmail(normalizedEmail, code, 'otp');
-
-    return res.json({
-      ok: true,
-      channel: 'email',
-      delivered: delivery.delivered,
-      maskedTarget: maskEmail(normalizedEmail),
-      ...(delivery.delivered === 'preview' ? { verificationCode: code } : {}),
-      displayName: displayName?.trim() || existing?.displayName || null,
-    });
-  } catch (error) {
-    console.error('Error in /api/auth/request-otp:', error);
-    return res
-      .status(500)
-      .json({ error: 'Could not send verification code. Please try again.' });
+app.get('/api/auth/supabase-config', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const config = getServerSupabaseConfig();
+  if (!config) {
+    return res.status(404).json({ error: 'Supabase config not set' });
   }
+  return res.json({
+    url: config.url,
+    anonKey: config.anonKey,
+    publishableKey: config.anonKey,
+  });
 });
 
-app.post('/api/auth/verify-otp', async (req, res) => {
+app.post('/api/auth/supabase-session', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   try {
-    const { email, code, displayName } = req.body as {
-      email?: string;
-      code?: string;
-      displayName?: string;
+    const authHeader = req.headers.authorization || '';
+    const accessToken = authHeader.startsWith('Bearer ')
+      ? authHeader.slice('Bearer '.length).trim()
+      : '';
+    if (!accessToken) {
+      return res.status(401).json({ error: 'Missing Supabase verification token.' });
+    }
+
+    const config = getServerSupabaseConfig();
+    if (!config) {
+      return res.status(503).json({
+        error:
+          'Supabase is not configured on the server. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in your environment variables.',
+      });
+    }
+
+    const verifyRes = await fetch(`${config.url}/auth/v1/user`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        apikey: config.anonKey,
+      },
+    });
+
+    if (!verifyRes.ok) {
+      return res.status(401).json({
+        error: 'Supabase verification token is invalid or expired. Please try again.',
+      });
+    }
+
+    const sbUser = (await verifyRes.json()) as {
+      id?: string;
+      email?: string | null;
+      phone?: string | null;
+      user_metadata?: { full_name?: string; name?: string };
     };
 
-    const normalizedEmail = (email || '').trim().toLowerCase();
-    if (!normalizedEmail) {
-      return res.status(400).json({ error: 'Email address is required.' });
+    if (!sbUser.id || (!sbUser.email && !sbUser.phone)) {
+      return res.status(401).json({ error: 'Invalid Supabase user profile.' });
     }
 
-    const cleanCode = (code || '').trim();
-    if (!/^\d{6}$/.test(cleanCode)) {
-      return res
-        .status(400)
-        .json({ error: 'Please enter the 6-digit verification code.' });
-    }
+    const normalizedEmail = sbUser.email ? sbUser.email.trim().toLowerCase() : null;
+    const normalizedPhone = sbUser.phone
+      ? sbUser.phone.startsWith('+')
+        ? sbUser.phone.trim()
+        : `+${sbUser.phone.trim()}`
+      : null;
 
-    const matched = await verifyAndConsumeOtp({
-      channel: 'email',
-      email: normalizedEmail,
-      code: cleanCode,
-    });
+    const existing = normalizedEmail
+      ? await findUserByEmail(normalizedEmail)
+      : null;
 
-    if (!matched) {
-      return res
-        .status(401)
-        .json({ error: 'Invalid or expired verification code.' });
-    }
+    const displayName =
+      sbUser.user_metadata?.full_name?.trim() ||
+      sbUser.user_metadata?.name?.trim() ||
+      existing?.displayName ||
+      (normalizedEmail ? normalizedEmail.split('@')[0] : normalizedPhone) ||
+      'Shift Member';
 
-    const existing = await findUserByEmail(normalizedEmail);
-    const user = await getOrCreateUser({
-      uid: existing ? existing.uid : `email:${crypto.randomUUID()}`,
-      email: normalizedEmail,
-      displayName:
-        displayName?.trim() ||
-        existing?.displayName ||
-        normalizedEmail.split('@')[0],
-      authProvider: existing?.authProvider || 'email-otp',
-    });
+    const user = normalizedEmail
+      ? await getOrCreateUser({
+          uid: existing ? existing.uid : `supabase:${sbUser.id}`,
+          email: normalizedEmail,
+          phone: normalizedPhone,
+          displayName,
+          authProvider: existing?.authProvider || 'email-otp',
+        })
+      : await getOrCreatePhoneUser({
+          phone: normalizedPhone!,
+          displayName,
+        });
 
     const token = signShiftToken({
       uid: user.uid,
@@ -281,10 +314,10 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       user: formatUserResponse(user),
     });
   } catch (error) {
-    console.error('Error in /api/auth/verify-otp:', error);
+    console.error('Error in /api/auth/supabase-session:', error);
     return res
       .status(500)
-      .json({ error: 'Verification failed. Please try again.' });
+      .json({ error: 'Could not complete sign-in. Please try again.' });
   }
 });
 
