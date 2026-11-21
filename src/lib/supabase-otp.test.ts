@@ -42,6 +42,13 @@ test('resolveSupabaseConfig reads publishable/anon/NEXT_PUBLIC keys and normaliz
     }),
     null
   );
+  assert.equal(
+    resolveSupabaseConfig({
+      VITE_SUPABASE_URL: 'https://abc.supabase.co',
+      VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_secret_never_allow_in_browser_12345',
+    }),
+    null
+  );
   assert.equal(isValidSupabaseUrl('https://169.254.169.254'), false);
   assert.equal(isValidSupabaseUrl('https://abc.supabase.co'), true);
 });
@@ -78,5 +85,9 @@ test('formatSupabaseOtpError maps common Supabase Auth & OTP errors clearly', ()
   assert.match(
     formatSupabaseOtpError(new Error('VITE_SUPABASE_URL missing'), 'send'),
     /VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY/i
+  );
+  assert.equal(
+    formatSupabaseOtpError(new Error('SMTP server not configured'), 'send'),
+    'SMTP server not configured'
   );
 });

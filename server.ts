@@ -201,7 +201,7 @@ app.post('/api/auth/signup', async (req, res) => {
 });
 
 function getServerSupabaseConfig() {
-  return resolveSupabaseConfig({
+  const fromEnv = resolveSupabaseConfig({
     VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     SUPABASE_URL: process.env.SUPABASE_URL,
@@ -213,6 +213,24 @@ function getServerSupabaseConfig() {
     SUPABASE_PUBLISHABLE_KEY: process.env.SUPABASE_PUBLISHABLE_KEY,
     SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
   });
+  if (fromEnv) return fromEnv;
+
+  const publicConfigPath = path.resolve(__dirname, 'supabase-config.json');
+  if (fs.existsSync(publicConfigPath)) {
+    try {
+      const json = JSON.parse(fs.readFileSync(publicConfigPath, 'utf8')) as {
+        url?: string;
+        publishableKey?: string;
+      };
+      return resolveSupabaseConfig({
+        VITE_SUPABASE_URL: json.url,
+        VITE_SUPABASE_PUBLISHABLE_KEY: json.publishableKey,
+      });
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 app.get('/api/auth/supabase-config', (_req, res) => {

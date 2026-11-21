@@ -40,6 +40,23 @@ function resolveBuildSupabaseEnv() {
     if (fromFile) return fromFile;
   }
 
+  const publicConfigPath = path.resolve(__dirname, 'supabase-config.json');
+  if (fs.existsSync(publicConfigPath)) {
+    try {
+      const json = JSON.parse(fs.readFileSync(publicConfigPath, 'utf8')) as {
+        url?: string;
+        publishableKey?: string;
+      };
+      const fromJson = resolveSupabaseConfig({
+        VITE_SUPABASE_URL: json.url,
+        VITE_SUPABASE_PUBLISHABLE_KEY: json.publishableKey,
+      });
+      if (fromJson) return fromJson;
+    } catch {
+      // Ignore invalid JSON
+    }
+  }
+
   return null;
 }
 

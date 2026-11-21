@@ -60,6 +60,7 @@ export function isValidSupabaseUrl(rawUrl: string): boolean {
 export function isLikelySupabaseKey(key: string): boolean {
   const cleaned = cleanEnv(key);
   if (cleaned.length < 20) return false;
+  if (/^sb_secret_/i.test(cleaned)) return false;
   if (/^https?:\/\//i.test(cleaned) || /\s/.test(cleaned)) return false;
   if (/^(your|replace|placeholder|example|changeme|default)/i.test(cleaned)) {
     return false;
@@ -141,7 +142,10 @@ export function formatSupabaseOtpError(
 
   const lower = rawMessage.toLowerCase();
 
-  if (lower.includes('vite_supabase_url') || lower.includes('not configured')) {
+  if (
+    lower.includes('vite_supabase_url') ||
+    lower.includes('supabase is not configured')
+  ) {
     return 'Supabase is not configured yet. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_ANON_KEY) to your environment variables and redeploy.';
   }
   if (lower.includes('invalid api key') || lower.includes('invalid jwt')) {

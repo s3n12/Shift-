@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import supabasePublicConfig from '../../supabase-config.json';
 import {
   formatSupabaseOtpError,
   parseEmailOtpTarget,
@@ -20,15 +21,21 @@ export interface SupabaseAuthSessionResult {
 }
 
 function getEnvConfig(): SupabaseConfig | null {
-  return resolveSupabaseConfig({
-    VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
-    NEXT_PUBLIC_SUPABASE_URL: import.meta.env.NEXT_PUBLIC_SUPABASE_URL,
-    VITE_SUPABASE_PUBLISHABLE_KEY: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-    VITE_SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY,
-    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
-      import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-  });
+  return (
+    resolveSupabaseConfig({
+      VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
+      NEXT_PUBLIC_SUPABASE_URL: import.meta.env.NEXT_PUBLIC_SUPABASE_URL,
+      VITE_SUPABASE_PUBLISHABLE_KEY: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+      VITE_SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY,
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
+        import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    }) ||
+    resolveSupabaseConfig({
+      VITE_SUPABASE_URL: supabasePublicConfig?.url,
+      VITE_SUPABASE_PUBLISHABLE_KEY: supabasePublicConfig?.publishableKey,
+    })
+  );
 }
 
 function buildSupabaseClient(config: SupabaseConfig): SupabaseClient {
