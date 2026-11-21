@@ -57,9 +57,10 @@ export function isValidSupabaseUrl(rawUrl: string): boolean {
   }
 }
 
-function isLikelySupabaseKey(key: string): boolean {
+export function isLikelySupabaseKey(key: string): boolean {
   const cleaned = cleanEnv(key);
   if (cleaned.length < 20) return false;
+  if (/^https?:\/\//i.test(cleaned) || /\s/.test(cleaned)) return false;
   if (/^(your|replace|placeholder|example|changeme|default)/i.test(cleaned)) {
     return false;
   }

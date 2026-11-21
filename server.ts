@@ -12,6 +12,7 @@ import {
   verifyPassword,
 } from './src/lib/auth-tokens.ts';
 import {
+  isLikelySupabaseKey,
   isValidSupabaseUrl,
   normalizeSupabaseUrl,
   resolveSupabaseConfig,
@@ -44,7 +45,9 @@ if (fs.existsSync(localEnvPath)) {
       !existing ||
       (key.endsWith('_SUPABASE_URL') &&
         !isValidSupabaseUrl(normalizeSupabaseUrl(existing))) ||
-      (key.includes('SUPABASE_') && key.endsWith('_KEY') && existing.length < 20);
+      (key.includes('SUPABASE_') &&
+        key.endsWith('_KEY') &&
+        !isLikelySupabaseKey(existing));
     if (shouldReplace) {
       process.env[key] = value;
     }

@@ -1,12 +1,63 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import {defineConfig} from 'vite';
+import {resolveSupabaseConfig} from './src/lib/supabase-otp';
+
+function resolveBuildSupabaseEnv() {
+  const fromProcess = resolveSupabaseConfig({
+    VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL,
+    NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    VITE_SUPABASE_PUBLISHABLE_KEY: process.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY,
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    SUPABASE_PUBLISHABLE_KEY: process.env.SUPABASE_PUBLISHABLE_KEY,
+    SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+  });
+  if (fromProcess) return fromProcess;
+
+  for (const filename of ['.env.local', '.env']) {
+    const filePath = path.resolve(__dirname, filename);
+    if (!fs.existsSync(filePath)) continue;
+    const parsed = dotenv.parse(fs.readFileSync(filePath, 'utf8'));
+    const fromFile = resolveSupabaseConfig({
+      VITE_SUPABASE_URL: parsed.VITE_SUPABASE_URL,
+      NEXT_PUBLIC_SUPABASE_URL: parsed.NEXT_PUBLIC_SUPABASE_URL,
+      SUPABASE_URL: parsed.SUPABASE_URL,
+      VITE_SUPABASE_PUBLISHABLE_KEY: parsed.VITE_SUPABASE_PUBLISHABLE_KEY,
+      VITE_SUPABASE_ANON_KEY: parsed.VITE_SUPABASE_ANON_KEY,
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
+        parsed.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: parsed.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      SUPABASE_PUBLISHABLE_KEY: parsed.SUPABASE_PUBLISHABLE_KEY,
+      SUPABASE_ANON_KEY: parsed.SUPABASE_ANON_KEY,
+    });
+    if (fromFile) return fromFile;
+  }
+
+  return null;
+}
 
 export default defineConfig(() => {
+  const supabaseEnv = resolveBuildSupabaseEnv();
+  const define: Record<string, string> = {};
+  if (supabaseEnv) {
+    define['import.meta.env.VITE_SUPABASE_URL'] = JSON.stringify(
+      supabaseEnv.url
+    );
+    define['import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY'] = JSON.stringify(
+      supabaseEnv.anonKey
+    );
+  }
+
   return {
     envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
+    define,
     plugins: [
       react(),
       tailwindcss(),

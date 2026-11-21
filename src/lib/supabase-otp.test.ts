@@ -19,8 +19,9 @@ test('resolveSupabaseConfig reads publishable/anon/NEXT_PUBLIC keys and normaliz
   });
 
   const fromNextPublic = resolveSupabaseConfig({
-    VITE_SUPABASE_URL: 'invalid',
-    VITE_SUPABASE_ANON_KEY: 'invalid',
+    VITE_SUPABASE_URL: 'default',
+    VITE_SUPABASE_PUBLISHABLE_KEY: 'https://iecqsmkzivppqhfygqbx.supabase.co/rest/v1/',
+    VITE_SUPABASE_ANON_KEY: 'default',
     NEXT_PUBLIC_SUPABASE_URL: ' "https://xyzproject.supabase.co/auth/v1/" ',
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: '  sb_publishable_next_key_123456  ',
   });
