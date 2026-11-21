@@ -1,4 +1,5 @@
 import type { HabitItem, PackingItem, TaskItem, TripItem, UserProfile } from '../types.ts';
+import { FIRESTORE_SESSION_TOKEN, firestoreStore } from './firestore-store.ts';
 import { vercelStore } from './vercel-store.ts';
 
 class BackendUnavailableError extends Error {
@@ -9,6 +10,10 @@ class BackendUnavailableError extends Error {
 }
 
 let useStandaloneStore = false;
+
+function isFirestoreToken(token: string | null | undefined): boolean {
+  return token === FIRESTORE_SESSION_TOKEN;
+}
 
 async function apiFetch<T>(
   path: string,
@@ -157,12 +162,14 @@ export const api = {
 
   // Tasks
   listTasks(token: string) {
+    if (isFirestoreToken(token)) return firestoreStore.listTasks();
     return withFallback(
       () => apiFetch<{ tasks: TaskItem[] }>('/api/tasks', token),
       () => vercelStore.listTasks(token)
     );
   },
   createTask(token: string, body: { title: string; mode?: string; notes?: string }) {
+    if (isFirestoreToken(token)) return firestoreStore.createTask(body);
     return withFallback(
       () =>
         apiFetch<{ task: TaskItem }>('/api/tasks', token, {
@@ -177,6 +184,7 @@ export const api = {
     id: number,
     body: { title?: string; isCompleted?: boolean; notes?: string | null; mode?: string }
   ) {
+    if (isFirestoreToken(token)) return firestoreStore.updateTask(id, body);
     return withFallback(
       () =>
         apiFetch<{ task: TaskItem }>(`/api/tasks/${id}`, token, {
@@ -187,6 +195,7 @@ export const api = {
     );
   },
   deleteTask(token: string, id: number) {
+    if (isFirestoreToken(token)) return firestoreStore.deleteTask(id);
     return withFallback(
       () =>
         apiFetch<{ ok: boolean }>(`/api/tasks/${id}`, token, {
@@ -198,6 +207,7 @@ export const api = {
 
   // Habits
   listHabits(token: string) {
+    if (isFirestoreToken(token)) return firestoreStore.listHabits();
     return withFallback(
       () => apiFetch<{ habits: HabitItem[] }>('/api/habits', token),
       () => vercelStore.listHabits(token)
@@ -207,6 +217,7 @@ export const api = {
     token: string,
     body: { title: string; category?: string; targetMinutes?: number | null }
   ) {
+    if (isFirestoreToken(token)) return firestoreStore.createHabit(body);
     return withFallback(
       () =>
         apiFetch<{ habit: HabitItem }>('/api/habits', token, {
@@ -217,6 +228,7 @@ export const api = {
     );
   },
   toggleHabit(token: string, id: number) {
+    if (isFirestoreToken(token)) return firestoreStore.toggleHabit(id);
     return withFallback(
       () =>
         apiFetch<{ habit: HabitItem }>(`/api/habits/${id}/toggle`, token, {
@@ -226,6 +238,7 @@ export const api = {
     );
   },
   deleteHabit(token: string, id: number) {
+    if (isFirestoreToken(token)) return firestoreStore.deleteHabit(id);
     return withFallback(
       () =>
         apiFetch<{ ok: boolean }>(`/api/habits/${id}`, token, {
@@ -237,6 +250,7 @@ export const api = {
 
   // Trips
   listTrips(token: string) {
+    if (isFirestoreToken(token)) return firestoreStore.listTrips();
     return withFallback(
       () => apiFetch<{ trips: TripItem[] }>('/api/trips', token),
       () => vercelStore.listTrips(token)
@@ -252,6 +266,7 @@ export const api = {
       packingList: PackingItem[];
     }
   ) {
+    if (isFirestoreToken(token)) return firestoreStore.createTrip(body);
     return withFallback(
       () =>
         apiFetch<{ trip: TripItem }>('/api/trips', token, {
@@ -272,6 +287,7 @@ export const api = {
       packingList?: PackingItem[];
     }
   ) {
+    if (isFirestoreToken(token)) return firestoreStore.updateTrip(id, body);
     return withFallback(
       () =>
         apiFetch<{ trip: TripItem }>(`/api/trips/${id}`, token, {
@@ -282,6 +298,7 @@ export const api = {
     );
   },
   deleteTrip(token: string, id: number) {
+    if (isFirestoreToken(token)) return firestoreStore.deleteTrip(id);
     return withFallback(
       () =>
         apiFetch<{ ok: boolean }>(`/api/trips/${id}`, token, {

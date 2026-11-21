@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useState,
+  type ErrorInfo,
+  type ReactNode,
+} from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 import { api } from './lib/api.ts';
 import { Header } from './components/Header.tsx';
@@ -14,6 +21,52 @@ import type {
   TaskItem,
   TripItem,
 } from './types.ts';
+
+class ShiftErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean; message: string }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: '' };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return {
+      hasError: true,
+      message: error?.message || 'An unexpected error occurred.',
+    };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Shift application error:', error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-[#FAF8F5] flex items-center justify-center px-6">
+          <div className="max-w-md w-full bg-white rounded-[24px] border border-[#E7E1D8] p-8 text-center space-y-4">
+            <p className="font-display text-2xl font-semibold text-[#1E293B]">
+              Shift
+            </p>
+            <p className="text-sm text-[#64748B]">
+              Something interrupted your session. Please reload to continue.
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="px-6 py-2.5 rounded-full bg-[#1E293B] text-white text-sm font-medium hover:bg-[#0F172A] transition-colors cursor-pointer"
+            >
+              Reload Workspace
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function ShiftWorkspace() {
   const { user, loading: authLoading, getToken, logout } = useAuth();
@@ -316,8 +369,10 @@ function ShiftWorkspace() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <ShiftWorkspace />
-    </AuthProvider>
+    <ShiftErrorBoundary>
+      <AuthProvider>
+        <ShiftWorkspace />
+      </AuthProvider>
+    </ShiftErrorBoundary>
   );
 }

@@ -1,0 +1,255 @@
+{
+  "entities": {
+    "UserProfileDoc": {
+      "title": "UserProfileDoc",
+      "description": "Private user account profile stored in Firestore for Google-authenticated Shift users.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID matching the document ID."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254,
+          "description": "Verified account email address."
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "User display name shown in the planner header."
+        },
+        "authProvider": {
+          "type": "string",
+          "enum": ["google"],
+          "description": "Authentication provider for this Firestore profile."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated."
+        }
+      },
+      "required": ["uid", "email", "displayName", "authProvider", "createdAt", "updatedAt"]
+    },
+    "TaskDoc": {
+      "title": "TaskDoc",
+      "description": "Work or weekend priority task belonging to a user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "Numeric identifier matching the document ID."
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Concise task title."
+        },
+        "isCompleted": {
+          "type": "boolean",
+          "description": "Whether the task is finished."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["work", "weekend"],
+          "description": "Planner mode this task belongs to."
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional task context or deadline note."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when last updated."
+        }
+      },
+      "required": ["id", "ownerUid", "title", "isCompleted", "mode", "notes", "createdAt", "updatedAt"]
+    },
+    "HabitDoc": {
+      "title": "HabitDoc",
+      "description": "Daily wellness, plant, or mindfulness habit belonging to a user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "Numeric identifier matching the document ID."
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "description": "Habit title."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["wellness", "plants", "mindful"],
+          "description": "Habit category."
+        },
+        "streakCount": {
+          "type": "integer",
+          "description": "Current consecutive day streak count (0..10000)."
+        },
+        "completedToday": {
+          "type": "boolean",
+          "description": "Whether the habit was completed on lastCompletedDate."
+        },
+        "lastCompletedDate": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10,
+          "description": "Optional YYYY-MM-DD date of last completion."
+        },
+        "targetMinutes": {
+          "type": "integer",
+          "description": "Optional target duration in minutes (1..480)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when last updated."
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "title",
+        "category",
+        "streakCount",
+        "completedToday",
+        "lastCompletedDate",
+        "targetMinutes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TripDoc": {
+      "title": "TripDoc",
+      "description": "Upcoming getaway card with countdown date and bounded packing checklist.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "Numeric identifier matching the document ID."
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "destination": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Destination city or region."
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 240,
+          "description": "Optional short description of the getaway."
+        },
+        "travelDate": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10,
+          "description": "Departure date in YYYY-MM-DD format."
+        },
+        "coverKey": {
+          "type": "string",
+          "enum": ["kyoto", "amalfi", "alpine"],
+          "description": "Selected visual cover atmosphere key."
+        },
+        "packingList": {
+          "type": "array",
+          "description": "Bounded list (max 100 items) of { id, label, packed } packing entries."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when last updated."
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "destination",
+        "subtitle",
+        "travelDate",
+        "coverKey",
+        "packingList",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfileDoc"
+      },
+      "description": "Private profile document per verified Firebase user. No cross-user reads or collection listing allowed."
+    },
+    "/users/{userId}/tasks/{taskId}": {
+      "schema": {
+        "$ref": "#/entities/TaskDoc"
+      },
+      "description": "Private work and weekend tasks owned exclusively by userId."
+    },
+    "/users/{userId}/habits/{habitId}": {
+      "schema": {
+        "$ref": "#/entities/HabitDoc"
+      },
+      "description": "Private daily habits and streak counters owned exclusively by userId."
+    },
+    "/users/{userId}/trips/{tripId}": {
+      "schema": {
+        "$ref": "#/entities/TripDoc"
+      },
+      "description": "Private upcoming trips and packing checklists owned exclusively by userId."
+    }
+  }
+}

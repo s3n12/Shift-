@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
+import { FIRESTORE_SESSION_TOKEN, firestoreStore } from '../lib/firestore-store.ts';
 import { api } from '../lib/api.ts';
 import type { UserProfile } from '../types.ts';
 
@@ -32,19 +33,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const tokenRef = useRef<string | null>(null);
   const isEmailSessionRef = useRef(false);
 
-  const syncFirebaseUser = useCallback(async (fbUser: User, idToken: string) => {
-    const res = await api.getMe(idToken, {
-      uid: fbUser.uid,
-      email: fbUser.email || `${fbUser.uid}@users.shift.app`,
-      displayName: fbUser.displayName,
-    });
-    if (res.token && res.token.startsWith('local.')) {
-      tokenRef.current = res.token;
-      isEmailSessionRef.current = true;
-    } else {
-      tokenRef.current = idToken;
-      isEmailSessionRef.current = false;
-    }
+  const syncFirebaseUser = useCallback(async (fbUser: User) => {
+    const res = await firestoreStore.syncGoogleUser(fbUser);
+    tokenRef.current = res.token;
+    isEmailSessionRef.current = false;
     setUser(res.user);
   }, []);
 
@@ -60,7 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (!fbUser) {
-        // Attempt to restore an active session (HttpOnly cookie on server or local session on static Vercel)
+        // Attempt to restore an active email/OTP session (HttpOnly cookie on server or local session)
         try {
           const restored = await api.getMe(null);
           if (!active) return;
@@ -87,8 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const idToken = await fbUser.getIdToken();
-        await syncFirebaseUser(fbUser, idToken);
+        await syncFirebaseUser(fbUser);
         if (active) setAuthError(null);
       } catch (err) {
         console.error('Failed to sync Firebase user:', err);
@@ -111,10 +102,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (isEmailSessionRef.current && tokenRef.current) {
       return tokenRef.current;
     }
+    if (tokenRef.current === FIRESTORE_SESSION_TOKEN && auth.currentUser) {
+      return FIRESTORE_SESSION_TOKEN;
+    }
     if (auth.currentUser) {
-      const fresh = await auth.currentUser.getIdToken();
-      tokenRef.current = fresh;
-      return fresh;
+      tokenRef.current = FIRESTORE_SESSION_TOKEN;
+      return FIRESTORE_SESSION_TOKEN;
     }
     return tokenRef.current;
   }, []);
@@ -123,8 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthError(null);
     try {
       const result = await signInWithPopup(auth, googleAuthProvider);
-      const idToken = await result.user.getIdToken();
-      await syncFirebaseUser(result.user, idToken);
+      await syncFirebaseUser(result.user);
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : '';
       let message = 'Google sign-in failed. Please allow popups and try again.';

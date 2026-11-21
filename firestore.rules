@@ -1,0 +1,289 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 4.1: Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Pillar 3: Global Hardened Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isEmailVerified() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidDateString(val) {
+      return val is string && val.size() == 10 && val.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function parentUserExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    // --- Pillar 2: Standalone Validation Blueprints ---
+    function isValidUser(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'authProvider', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'authProvider', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.uid == userId
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 254
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 120
+        && data.authProvider == 'google'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTask(data, userId) {
+      return data.keys().hasAll(['id', 'ownerUid', 'title', 'isCompleted', 'mode', 'notes', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'title', 'isCompleted', 'mode', 'notes', 'createdAt', 'updatedAt'])
+        && data.id is int
+        && data.id > 0
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.ownerUid == userId
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 200
+        && data.isCompleted is bool
+        && data.mode in ['work', 'weekend']
+        && (data.notes == null || (data.notes is string && data.notes.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidHabit(data, userId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'title', 'category', 'streakCount',
+          'completedToday', 'lastCompletedDate', 'targetMinutes',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'title', 'category', 'streakCount',
+          'completedToday', 'lastCompletedDate', 'targetMinutes',
+          'createdAt', 'updatedAt'
+        ])
+        && data.id is int
+        && data.id > 0
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.ownerUid == userId
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 160
+        && data.category in ['wellness', 'plants', 'mindful']
+        && data.streakCount is int
+        && data.streakCount >= 0
+        && data.streakCount <= 10000
+        && data.completedToday is bool
+        && (data.lastCompletedDate == null || isValidDateString(data.lastCompletedDate))
+        && (data.targetMinutes == null || (data.targetMinutes is int && data.targetMinutes >= 1 && data.targetMinutes <= 480))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPackingItem(item) {
+      return item is map
+        && item.keys().hasAll(['id', 'label', 'packed'])
+        && item.keys().hasOnly(['id', 'label', 'packed'])
+        && item.id is string
+        && item.id.size() >= 1
+        && item.id.size() <= 64
+        && item.label is string
+        && item.label.size() >= 1
+        && item.label.size() <= 160
+        && item.packed is bool;
+    }
+
+    function isValidTrip(data, userId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'destination', 'subtitle', 'travelDate',
+          'coverKey', 'packingList', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'destination', 'subtitle', 'travelDate',
+          'coverKey', 'packingList', 'createdAt', 'updatedAt'
+        ])
+        && data.id is int
+        && data.id > 0
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.ownerUid == userId
+        && data.destination is string
+        && data.destination.size() >= 1
+        && data.destination.size() <= 120
+        && (data.subtitle == null || (data.subtitle is string && data.subtitle.size() <= 240))
+        && isValidDateString(data.travelDate)
+        && data.coverKey in ['kyoto', 'amalfi', 'alpine']
+        && data.packingList is list
+        && data.packingList.size() <= 100
+        && (data.packingList.size() == 0 || isValidPackingItem(data.packingList[0]))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection: /users/{userId} (PII Isolated, Owner Only) ---
+    match /users/{userId} {
+      allow get: if isVerifiedOwner(userId) && isValidId(userId);
+      allow list: if false;
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUser(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUser(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().authProvider == existing().authProvider
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt'])
+        );
+      allow delete: if false;
+
+      // --- Subcollection: /users/{userId}/tasks/{taskId} ---
+      match /tasks/{taskId} {
+        allow get: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(taskId)
+          && existing().ownerUid == request.auth.uid
+          && parentUserExists(userId);
+        allow list: if isVerifiedOwner(userId)
+          && existing().ownerUid == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(taskId)
+          && isValidTask(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentUserExists(userId);
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(taskId)
+          && isValidTask(incoming(), userId)
+          && incoming().id == existing().id
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action: Toggle completion state
+            incoming().diff(existing()).affectedKeys().hasOnly(['isCompleted', 'updatedAt'])
+            // Action: Edit task details
+            || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'notes', 'mode', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'isCompleted', 'notes', 'mode', 'updatedAt'])
+          )
+          && parentUserExists(userId);
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(taskId)
+          && existing().ownerUid == request.auth.uid
+          && parentUserExists(userId);
+      }
+
+      // --- Subcollection: /users/{userId}/habits/{habitId} ---
+      match /habits/{habitId} {
+        allow get: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(habitId)
+          && existing().ownerUid == request.auth.uid
+          && parentUserExists(userId);
+        allow list: if isVerifiedOwner(userId)
+          && existing().ownerUid == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(habitId)
+          && isValidHabit(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentUserExists(userId);
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(habitId)
+          && isValidHabit(incoming(), userId)
+          && incoming().id == existing().id
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action: Toggle daily completion and streak
+            incoming().diff(existing()).affectedKeys().hasOnly(['completedToday', 'streakCount', 'lastCompletedDate', 'updatedAt'])
+            // Action: Edit habit metadata
+            || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'targetMinutes', 'updatedAt'])
+          )
+          && parentUserExists(userId);
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(habitId)
+          && existing().ownerUid == request.auth.uid
+          && parentUserExists(userId);
+      }
+
+      // --- Subcollection: /users/{userId}/trips/{tripId} ---
+      match /trips/{tripId} {
+        allow get: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(tripId)
+          && existing().ownerUid == request.auth.uid
+          && parentUserExists(userId);
+        allow list: if isVerifiedOwner(userId)
+          && existing().ownerUid == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(tripId)
+          && isValidTrip(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentUserExists(userId);
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(tripId)
+          && isValidTrip(incoming(), userId)
+          && incoming().id == existing().id
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action: Update packing checklist
+            incoming().diff(existing()).affectedKeys().hasOnly(['packingList', 'updatedAt'])
+            // Action: Edit getaway details
+            || incoming().diff(existing()).affectedKeys().hasOnly(['destination', 'subtitle', 'travelDate', 'coverKey', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['destination', 'subtitle', 'travelDate', 'coverKey', 'packingList', 'updatedAt'])
+          )
+          && parentUserExists(userId);
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(tripId)
+          && existing().ownerUid == request.auth.uid
+          && parentUserExists(userId);
+      }
+    }
+  }
+}

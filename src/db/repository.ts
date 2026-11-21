@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { and, asc, desc, eq, gt } from 'drizzle-orm';
 import { db } from './index.ts';
+import { fileRepository } from './file-store.ts';
 import {
   habits,
   otpCodes,
@@ -17,6 +18,8 @@ function formatFutureDate(daysFromNow: number): string {
 }
 
 async function seedStarterDataForUser(userId: number) {
+  if (!db) return;
+
   const existingTasks = await db
     .select({ id: tasks.id })
     .from(tasks)
@@ -112,10 +115,22 @@ async function seedStarterDataForUser(userId: number) {
         coverKey: 'kyoto',
         packingList: [
           { id: crypto.randomUUID(), label: 'Passport & rail pass', packed: true },
-          { id: crypto.randomUUID(), label: 'Linen overshirt & comfortable walking shoes', packed: true },
-          { id: crypto.randomUUID(), label: '35mm travel camera & spare film rolls', packed: false },
+          {
+            id: crypto.randomUUID(),
+            label: 'Linen overshirt & comfortable walking shoes',
+            packed: true,
+          },
+          {
+            id: crypto.randomUUID(),
+            label: '35mm travel camera & spare film rolls',
+            packed: false,
+          },
           { id: crypto.randomUUID(), label: 'Compact rain umbrella', packed: false },
-          { id: crypto.randomUUID(), label: 'Universal travel power adapter', packed: false },
+          {
+            id: crypto.randomUUID(),
+            label: 'Universal travel power adapter',
+            packed: false,
+          },
         ],
       },
       {
@@ -125,9 +140,21 @@ async function seedStarterDataForUser(userId: number) {
         travelDate: formatFutureDate(68),
         coverKey: 'amalfi',
         packingList: [
-          { id: crypto.randomUUID(), label: 'Swimwear & Turkish linen towel', packed: false },
-          { id: crypto.randomUUID(), label: 'Mineral sunscreen & sunglasses', packed: false },
-          { id: crypto.randomUUID(), label: 'Evening summer reading novel', packed: true },
+          {
+            id: crypto.randomUUID(),
+            label: 'Swimwear & Turkish linen towel',
+            packed: false,
+          },
+          {
+            id: crypto.randomUUID(),
+            label: 'Mineral sunscreen & sunglasses',
+            packed: false,
+          },
+          {
+            id: crypto.randomUUID(),
+            label: 'Evening summer reading novel',
+            packed: true,
+          },
         ],
       },
     ]);
@@ -142,6 +169,9 @@ export async function getOrCreateUser(params: {
   authProvider?: string;
   passwordHash?: string | null;
 }) {
+  if (!db) {
+    return fileRepository.getOrCreateUser(params);
+  }
   try {
     const normalizedEmail = params.email.trim().toLowerCase();
     const existingByEmail = await db
@@ -153,7 +183,10 @@ export async function getOrCreateUser(params: {
     if (existingByEmail.length > 0) {
       const current = existingByEmail[0];
       const updates: Partial<typeof users.$inferInsert> = {};
-      if (params.displayName?.trim() && (!current.displayName || params.passwordHash)) {
+      if (
+        params.displayName?.trim() &&
+        (!current.displayName || params.passwordHash)
+      ) {
         updates.displayName = params.displayName.trim();
       }
       if (params.passwordHash && !current.passwordHash) {
@@ -204,6 +237,9 @@ export async function getOrCreateUser(params: {
 }
 
 export async function findUserByEmail(email: string) {
+  if (!db) {
+    return fileRepository.findUserByEmail(email);
+  }
   try {
     const normalized = email.trim().toLowerCase();
     const rows = await db
@@ -219,6 +255,9 @@ export async function findUserByEmail(email: string) {
 }
 
 export async function findUserByPhone(phone: string) {
+  if (!db) {
+    return fileRepository.findUserByPhone(phone);
+  }
   try {
     const rows = await db
       .select()
@@ -236,6 +275,9 @@ export async function getOrCreatePhoneUser(params: {
   phone: string;
   displayName?: string | null;
 }) {
+  if (!db) {
+    return fileRepository.getOrCreatePhoneUser(params);
+  }
   try {
     const existing = await findUserByPhone(params.phone);
     if (existing) {
@@ -279,8 +321,15 @@ export async function getOrCreatePhoneUser(params: {
 }
 
 export async function findUserByUid(uid: string) {
+  if (!db) {
+    return fileRepository.findUserByUid(uid);
+  }
   try {
-    const rows = await db.select().from(users).where(eq(users.uid, uid)).limit(1);
+    const rows = await db
+      .select()
+      .from(users)
+      .where(eq(users.uid, uid))
+      .limit(1);
     return rows[0] ?? null;
   } catch (error) {
     console.error('Database error in findUserByUid:', error);
@@ -295,6 +344,9 @@ export async function createOtpCode(params: {
   code: string;
   purpose: string;
 }) {
+  if (!db) {
+    return fileRepository.createOtpCode(params);
+  }
   try {
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await db.insert(otpCodes).values({
@@ -318,6 +370,9 @@ export async function verifyAndConsumeOtp(params: {
   phone?: string | null;
   code: string;
 }) {
+  if (!db) {
+    return fileRepository.verifyAndConsumeOtp(params);
+  }
   try {
     const now = new Date();
     const targetCondition =
@@ -359,6 +414,9 @@ export async function verifyAndConsumeOtp(params: {
 // --- TASKS ---
 
 export async function listTasks(userId: number) {
+  if (!db) {
+    return fileRepository.listTasks(userId);
+  }
   try {
     return await db
       .select()
@@ -375,6 +433,9 @@ export async function createTask(
   userId: number,
   data: { title: string; mode?: string; notes?: string | null }
 ) {
+  if (!db) {
+    return fileRepository.createTask(userId, data);
+  }
   try {
     const rows = await db
       .insert(tasks)
@@ -396,8 +457,16 @@ export async function createTask(
 export async function updateTask(
   userId: number,
   taskId: number,
-  updates: { title?: string; isCompleted?: boolean; notes?: string | null; mode?: string }
+  updates: {
+    title?: string;
+    isCompleted?: boolean;
+    notes?: string | null;
+    mode?: string;
+  }
 ) {
+  if (!db) {
+    return fileRepository.updateTask(userId, taskId, updates);
+  }
   try {
     const rows = await db
       .update(tasks)
@@ -412,6 +481,9 @@ export async function updateTask(
 }
 
 export async function deleteTask(userId: number, taskId: number) {
+  if (!db) {
+    return fileRepository.deleteTask(userId, taskId);
+  }
   try {
     const rows = await db
       .delete(tasks)
@@ -427,6 +499,9 @@ export async function deleteTask(userId: number, taskId: number) {
 // --- HABITS ---
 
 export async function listHabits(userId: number) {
+  if (!db) {
+    return fileRepository.listHabits(userId);
+  }
   try {
     const today = new Date().toISOString().slice(0, 10);
     const rows = await db
@@ -449,6 +524,9 @@ export async function createHabit(
   userId: number,
   data: { title: string; category?: string; targetMinutes?: number | null }
 ) {
+  if (!db) {
+    return fileRepository.createHabit(userId, data);
+  }
   try {
     const rows = await db
       .insert(habits)
@@ -469,6 +547,9 @@ export async function createHabit(
 }
 
 export async function toggleHabitToday(userId: number, habitId: number) {
+  if (!db) {
+    return fileRepository.toggleHabitToday(userId, habitId);
+  }
   try {
     const existing = await db
       .select()
@@ -505,6 +586,9 @@ export async function toggleHabitToday(userId: number, habitId: number) {
 }
 
 export async function deleteHabit(userId: number, habitId: number) {
+  if (!db) {
+    return fileRepository.deleteHabit(userId, habitId);
+  }
   try {
     const rows = await db
       .delete(habits)
@@ -520,6 +604,9 @@ export async function deleteHabit(userId: number, habitId: number) {
 // --- TRIPS ---
 
 export async function listTrips(userId: number) {
+  if (!db) {
+    return fileRepository.listTrips(userId);
+  }
   try {
     return await db
       .select()
@@ -542,6 +629,9 @@ export async function createTrip(
     packingList?: PackingItem[];
   }
 ) {
+  if (!db) {
+    return fileRepository.createTrip(userId, data);
+  }
   try {
     const rows = await db
       .insert(trips)
@@ -572,6 +662,9 @@ export async function updateTrip(
     packingList?: PackingItem[];
   }
 ) {
+  if (!db) {
+    return fileRepository.updateTrip(userId, tripId, updates);
+  }
   try {
     const rows = await db
       .update(trips)
@@ -586,6 +679,9 @@ export async function updateTrip(
 }
 
 export async function deleteTrip(userId: number, tripId: number) {
+  if (!db) {
+    return fileRepository.deleteTrip(userId, tripId);
+  }
   try {
     const rows = await db
       .delete(trips)
