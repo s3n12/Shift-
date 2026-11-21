@@ -1,3 +1,9 @@
+import { sanitizeSecretEnv } from './secret-utils.ts';
+
+export function getFast2SmsApiKey(): string | null {
+  return sanitizeSecretEnv(process.env.FAST2SMS_API_KEY, 'FAST2SMS_API_KEY');
+}
+
 export function normalizeIndianPhone(input: string): string | null {
   const digitsOnly = (input || '').replace(/\D/g, '');
   let tenDigits = digitsOnly;
@@ -45,11 +51,11 @@ interface Fast2SmsResponse {
 export async function sendOtpSms(
   toPhone: string,
   code: string
-): Promise<{ delivered: 'sms' | 'preview' }> {
-  const fast2smsKey = process.env.FAST2SMS_API_KEY?.trim();
+): Promise<{ delivered: 'sms' | 'preview'; notice?: string }> {
+  const fast2smsKey = getFast2SmsApiKey();
   const messageText = `Your Shift verification code is ${code}. It expires in 5 minutes.`;
 
-  // 1. Fast2SMS Quick/OTP API (for Indian +91 10-digit numbers)
+  // Fast2SMS Quick/OTP API (for Indian +91 10-digit numbers)
   if (fast2smsKey) {
     const indianTenDigit = toPhone.replace(/^\+91/, '').replace(/\D/g, '');
     if (!/^\d{10}$/.test(indianTenDigit)) {
@@ -74,8 +80,12 @@ export async function sendOtpSms(
         }),
       });
     } catch (networkErr) {
-      console.error('Fast2SMS network error:', networkErr);
-      throw new Error('Unable to reach the SMS service right now. Please try again.');
+      console.warn('Fast2SMS network error, falling back to preview mode:', networkErr);
+      return {
+        delivered: 'preview',
+        notice:
+          'Unable to reach Fast2SMS right now. Showing verification code in preview mode.',
+      };
     }
 
     const rawBody = await response.text().catch(() => '');
@@ -87,24 +97,27 @@ export async function sendOtpSms(
     }
 
     if (!response.ok || parsed?.return === false) {
-      console.error('Fast2SMS delivery failed:', response.status, rawBody);
+      console.warn('Fast2SMS delivery unavailable:', response.status, parsed?.status_code ?? '');
       const apiMsg = Array.isArray(parsed?.message)
         ? parsed?.message.join(' ')
         : typeof parsed?.message === 'string'
           ? parsed.message
           : '';
+
       if (response.status === 401 || response.status === 403 || parsed?.status_code === 412) {
-        throw new Error(
-          apiMsg
-            ? `SMS delivery failed: ${apiMsg}`
-            : 'Fast2SMS rejected the API key. Check FAST2SMS_API_KEY in Secrets.'
-        );
+        return {
+          delivered: 'preview',
+          notice:
+            'Fast2SMS rejected FAST2SMS_API_KEY (Invalid Authentication). Update FAST2SMS_API_KEY in Secrets or enable Phone Sign-In in Firebase Console to deliver real SMS.',
+        };
       }
-      throw new Error(
-        apiMsg
-          ? `SMS delivery failed: ${apiMsg}`
-          : 'Could not send SMS OTP via Fast2SMS. Please try again.'
-      );
+
+      return {
+        delivered: 'preview',
+        notice: apiMsg
+          ? `Fast2SMS could not send SMS (${apiMsg}). Using preview code instead.`
+          : 'Fast2SMS could not deliver SMS right now. Add a valid FAST2SMS_API_KEY in Secrets to deliver real SMS.',
+      };
     }
 
     return { delivered: 'sms' };

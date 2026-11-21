@@ -12,12 +12,20 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isEmailVerified() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+    function isVerifiedAccount() {
+      return isSignedIn()
+        && (
+          request.auth.token.email_verified == true
+          || (
+            'phone_number' in request.auth.token
+            && request.auth.token.phone_number is string
+            && request.auth.token.phone_number.size() >= 8
+          )
+        );
     }
 
     function isVerifiedOwner(userId) {
-      return isEmailVerified() && request.auth.uid == userId;
+      return isVerifiedAccount() && request.auth.uid == userId;
     }
 
     function isValidId(id) {
@@ -36,6 +44,10 @@ service cloud.firestore {
       return val is string && val.size() == 10 && val.matches('^\\d{4}-\\d{2}-\\d{2}$');
     }
 
+    function isValidPhone(val) {
+      return val is string && val.size() >= 8 && val.size() <= 20 && val.matches('^\\+[0-9]{8,16}$');
+    }
+
     function parentUserExists(userId) {
       return exists(/databases/$(database)/documents/users/$(userId));
     }
@@ -43,17 +55,17 @@ service cloud.firestore {
     // --- Pillar 2: Standalone Validation Blueprints ---
     function isValidUser(data, userId) {
       return data.keys().hasAll(['uid', 'email', 'displayName', 'authProvider', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'email', 'displayName', 'authProvider', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'phone', 'displayName', 'authProvider', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
         && data.uid == request.auth.uid
         && data.uid == userId
-        && data.email is string
-        && data.email.size() >= 3
-        && data.email.size() <= 254
+        && (data.email == null || (data.email is string && data.email.size() >= 3 && data.email.size() <= 254))
+        && (!('phone' in data) || data.phone == null || isValidPhone(data.phone))
+        && (data.email != null || ('phone' in data && data.phone != null))
         && data.displayName is string
         && data.displayName.size() >= 1
         && data.displayName.size() <= 120
-        && data.authProvider == 'google'
+        && data.authProvider in ['google', 'phone']
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -163,7 +175,9 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt'])
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'phone', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'updatedAt'])
           || incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
           || incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt'])
         );

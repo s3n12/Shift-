@@ -18,7 +18,7 @@ import {
   PHONE_OTP_TTL_MS,
   verifyOtpChallengeToken,
 } from './src/lib/otp-token.ts';
-import { sendOtpEmail } from './src/lib/mailer.ts';
+import { getResendApiKey, MailerConfigError, sendOtpEmail } from './src/lib/mailer.ts';
 import {
   maskPhoneNumber,
   normalizeIndianPhone,
@@ -219,7 +219,6 @@ app.post('/api/auth/request-otp', async (req, res) => {
         PHONE_OTP_TTL_MS
       );
 
-      const hasFast2SmsKey = Boolean(process.env.FAST2SMS_API_KEY?.trim());
       const delivery = await sendOtpSms(normalizedPhone, code);
 
       await createOtpCode({
@@ -230,16 +229,17 @@ app.post('/api/auth/request-otp', async (req, res) => {
         ttlMs: PHONE_OTP_TTL_MS,
       });
 
-      const exposePreviewCode = !hasFast2SmsKey && delivery.delivered === 'preview';
+      const exposePreviewCode = delivery.delivered === 'preview';
 
       return res.json({
         ok: true,
         channel: 'phone',
-        delivered: hasFast2SmsKey ? 'sms' : delivery.delivered,
+        delivered: delivery.delivered,
         maskedTarget: maskPhoneNumber(normalizedPhone),
         otpToken,
         expiresInSeconds: Math.round(PHONE_OTP_TTL_MS / 1000),
         ...(exposePreviewCode ? { verificationCode: code } : {}),
+        ...(delivery.notice ? { notice: delivery.notice } : {}),
         displayName: displayName?.trim() || existing?.displayName || null,
       });
     }
@@ -257,7 +257,7 @@ app.post('/api/auth/request-otp', async (req, res) => {
       OTP_TTL_MS
     );
 
-    const hasResendKey = Boolean(process.env.RESEND_API_KEY?.trim());
+    const hasResendKey = Boolean(getResendApiKey());
     const delivery = await sendOtpEmail(normalizedEmail, code, 'otp');
 
     await createOtpCode({
@@ -282,6 +282,10 @@ app.post('/api/auth/request-otp', async (req, res) => {
       displayName: displayName?.trim() || existing?.displayName || null,
     });
   } catch (error) {
+    if (error instanceof MailerConfigError) {
+      console.warn('OTP delivery notice:', error.message);
+      return res.status(error.statusCode).json({ error: error.message });
+    }
     console.error('Error in /api/auth/request-otp:', error);
     const msg =
       error instanceof Error && error.message

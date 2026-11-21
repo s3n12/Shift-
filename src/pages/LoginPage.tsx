@@ -1,4 +1,5 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import type { ConfirmationResult } from 'firebase/auth';
 import {
   ArrowLeft,
   ArrowRight,
@@ -17,10 +18,49 @@ import { LOGIN_HERO_IMAGE } from '../types.ts';
 import { MediaImage } from '../components/MediaImage.tsx';
 
 type AuthMode = 'login' | 'signup' | 'otp' | 'phone';
+type DeliveryMode = 'email' | 'sms' | 'firebase' | 'preview';
+
+const RECAPTCHA_CONTAINER_ID = 'shift-recaptcha-container';
+
+const FIREBASE_FALLBACK_CODES = [
+  'auth/operation-not-allowed',
+  'auth/billing-not-enabled',
+  'auth/unauthorized-domain',
+  'auth/captcha-check-failed',
+  'auth/invalid-app-credential',
+  'auth/app-not-authorized',
+  'auth/internal-error',
+  'auth/network-request-failed',
+];
+
+function maskPhoneDisplay(e164: string): string {
+  if (e164.startsWith('+91') && e164.length === 13) {
+    return `+91 ${e164.slice(3, 5)}****${e164.slice(-4)}`;
+  }
+  return e164;
+}
+
+function getFirebaseErrorCode(err: unknown): string {
+  if (err && typeof err === 'object' && 'code' in err && typeof err.code === 'string') {
+    return err.code;
+  }
+  if (err instanceof Error) {
+    const match = err.message.match(/auth\/[a-z0-9-]+/i);
+    if (match) return match[0].toLowerCase();
+  }
+  return '';
+}
 
 export function LoginPage() {
-  const { loginWithGoogle, completeEmailOtpLogin, authError, clearAuthError } =
-    useAuth();
+  const {
+    loginWithGoogle,
+    startFirebasePhoneOtp,
+    verifyFirebasePhoneOtp,
+    resetRecaptcha,
+    completeEmailOtpLogin,
+    authError,
+    clearAuthError,
+  } = useAuth();
 
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [otpStep, setOtpStep] = useState<'input' | 'verify'>('input');
@@ -31,23 +71,87 @@ export function LoginPage() {
   const [displayName, setDisplayName] = useState('');
   const [otpInput, setOtpInput] = useState('');
   const [otpToken, setOtpToken] = useState<string | null>(null);
+  const [firebaseConfirmation, setFirebaseConfirmation] =
+    useState<ConfirmationResult | null>(null);
   const [maskedTarget, setMaskedTarget] = useState('');
-  const [deliveredMode, setDeliveredMode] = useState<'email' | 'sms' | 'preview'>('email');
+  const [deliveredMode, setDeliveredMode] = useState<DeliveryMode>('email');
   const [deliveredCode, setDeliveredCode] = useState<string | null>(null);
+  const [deliveryNotice, setDeliveryNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const errorMessage = localError || authError;
 
+  useEffect(() => {
+    return () => {
+      resetRecaptcha(RECAPTCHA_CONTAINER_ID);
+    };
+  }, [resetRecaptcha]);
+
   const switchMode = (next: AuthMode) => {
     setAuthMode(next);
     setOtpStep('input');
     setOtpInput('');
     setOtpToken(null);
+    setFirebaseConfirmation(null);
     setDeliveredCode(null);
+    setDeliveryNotice(null);
     setLocalError(null);
     clearAuthError();
+    resetRecaptcha(RECAPTCHA_CONTAINER_ID);
+  };
+
+  const requestPhoneOtpFlow = async (cleanDigits: string) => {
+    const phoneE164 = `+91${cleanDigits}`;
+
+    // 1. Primary: Firebase Phone Auth via RecaptchaVerifier + signInWithPhoneNumber
+    try {
+      const confirmation = await startFirebasePhoneOtp(
+        phoneE164,
+        RECAPTCHA_CONTAINER_ID
+      );
+      setFirebaseConfirmation(confirmation);
+      setOtpToken(null);
+      setMaskedTarget(maskPhoneDisplay(phoneE164));
+      setDeliveredMode('firebase');
+      setDeliveredCode(null);
+      setDeliveryNotice(null);
+      setOtpInput('');
+      setOtpStep('verify');
+      return;
+    } catch (fbErr: unknown) {
+      const fbCode = getFirebaseErrorCode(fbErr);
+      if (fbCode === 'auth/invalid-phone-number') {
+        throw new Error('Please enter a valid 10-digit Indian mobile number.');
+      }
+      if (fbCode === 'auth/too-many-requests') {
+        throw new Error('Too many SMS attempts. Please wait a few minutes and try again.');
+      }
+
+      // If Firebase Phone Auth isn't enabled yet or blocked by domain/billing, fall back to backend Fast2SMS / preview
+      const shouldFallback =
+        !fbCode || FIREBASE_FALLBACK_CODES.includes(fbCode);
+      if (!shouldFallback) {
+        throw fbErr;
+      }
+    }
+
+    // 2. Fallback: Backend /api/auth/request-otp (Fast2SMS or local preview mode)
+    const res = await api.requestOtp({
+      channel: 'phone',
+      phone: phoneE164,
+    });
+    setFirebaseConfirmation(null);
+    setMaskedTarget(res.maskedTarget);
+    setDeliveredMode(res.delivered);
+    setOtpToken(res.otpToken ?? null);
+    setDeliveredCode(
+      res.delivered === 'preview' ? (res.verificationCode ?? null) : null
+    );
+    setDeliveryNotice(res.notice ?? null);
+    setOtpInput('');
+    setOtpStep('verify');
   };
 
   const handlePrimarySubmit = async (e: FormEvent) => {
@@ -78,18 +182,7 @@ export function LoginPage() {
           setLocalError('Please enter a valid 10-digit mobile number.');
           return;
         }
-        const res = await api.requestOtp({
-          channel: 'phone',
-          phone: `+91${cleanDigits}`,
-        });
-        setMaskedTarget(res.maskedTarget);
-        setDeliveredMode(res.delivered);
-        setOtpToken(res.otpToken ?? null);
-        setDeliveredCode(
-          res.delivered === 'preview' ? (res.verificationCode ?? null) : null
-        );
-        setOtpInput('');
-        setOtpStep('verify');
+        await requestPhoneOtpFlow(cleanDigits);
         return;
       }
 
@@ -98,12 +191,14 @@ export function LoginPage() {
         channel: 'email',
         email: email.trim(),
       });
+      setFirebaseConfirmation(null);
       setMaskedTarget(res.maskedTarget);
       setDeliveredMode(res.delivered);
       setOtpToken(res.otpToken ?? null);
       setDeliveredCode(
         res.delivered === 'preview' ? (res.verificationCode ?? null) : null
       );
+      setDeliveryNotice(res.notice ?? null);
       setOtpInput('');
       setOtpStep('verify');
     } catch (err: unknown) {
@@ -121,6 +216,11 @@ export function LoginPage() {
     clearAuthError();
     setBusy(true);
     try {
+      if (authMode === 'phone' && firebaseConfirmation) {
+        await verifyFirebasePhoneOtp(firebaseConfirmation, otpInput.trim());
+        return;
+      }
+
       const res =
         authMode === 'phone'
           ? await api.verifyOtp({
@@ -137,9 +237,16 @@ export function LoginPage() {
             });
       completeEmailOtpLogin(res.token, res.user);
     } catch (err: unknown) {
-      setLocalError(
-        err instanceof Error ? err.message : 'Invalid verification code.'
-      );
+      const fbCode = getFirebaseErrorCode(err);
+      if (fbCode === 'auth/invalid-verification-code') {
+        setLocalError('Invalid 6-digit verification code. Please check the SMS and try again.');
+      } else if (fbCode === 'auth/code-expired') {
+        setLocalError('This verification code has expired. Click Resend code to request a new one.');
+      } else {
+        setLocalError(
+          err instanceof Error ? err.message : 'Invalid verification code.'
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -149,22 +256,28 @@ export function LoginPage() {
     setLocalError(null);
     setBusy(true);
     try {
-      const res =
-        authMode === 'phone'
-          ? await api.requestOtp({
-              channel: 'phone',
-              phone: `+91${phoneNumber.replace(/\D/g, '')}`,
-            })
-          : await api.requestOtp({
-              channel: 'email',
-              email: email.trim(),
-            });
+      if (authMode === 'phone') {
+        const cleanDigits = phoneNumber.replace(/\D/g, '');
+        if (cleanDigits.length !== 10) {
+          setLocalError('Please enter a valid 10-digit mobile number.');
+          return;
+        }
+        await requestPhoneOtpFlow(cleanDigits);
+        return;
+      }
+
+      const res = await api.requestOtp({
+        channel: 'email',
+        email: email.trim(),
+      });
+      setFirebaseConfirmation(null);
       setMaskedTarget(res.maskedTarget);
       setDeliveredMode(res.delivered);
       setOtpToken(res.otpToken ?? null);
       setDeliveredCode(
         res.delivered === 'preview' ? (res.verificationCode ?? null) : null
       );
+      setDeliveryNotice(res.notice ?? null);
       setOtpInput('');
     } catch (err: unknown) {
       setLocalError(
@@ -430,7 +543,7 @@ export function LoginPage() {
                     </p>
                     <p className="text-[#5C6672] mt-0.5 text-xs leading-relaxed">
                       {isPhoneOtp ? (
-                        deliveredMode === 'sms' ? (
+                        deliveredMode === 'firebase' || deliveredMode === 'sms' ? (
                           <>
                             We sent a 6-digit SMS verification code to{' '}
                             <span className="font-medium text-[#1E293B]">
@@ -483,9 +596,11 @@ export function LoginPage() {
                           </button>
                         </div>
                         <p className="text-[11px] text-[#94A3B8]">
-                          {isPhoneOtp
-                            ? 'Add FAST2SMS_API_KEY in Secrets to deliver real SMS.'
-                            : 'Set RESEND_API_KEY in environment variables to send real OTP emails.'}
+                          {deliveryNotice
+                            ? deliveryNotice
+                            : isPhoneOtp
+                              ? 'Add FAST2SMS_API_KEY in Secrets to deliver real SMS.'
+                              : 'Set RESEND_API_KEY in environment variables to send real OTP emails.'}
                         </p>
                       </div>
                     )}
@@ -532,8 +647,11 @@ export function LoginPage() {
                     setOtpStep('input');
                     setOtpInput('');
                     setOtpToken(null);
+                    setFirebaseConfirmation(null);
                     setDeliveredCode(null);
+                    setDeliveryNotice(null);
                     setLocalError(null);
+                    resetRecaptcha(RECAPTCHA_CONTAINER_ID);
                   }}
                   className="inline-flex items-center gap-1 text-[#64748B] hover:text-[#1E293B] cursor-pointer"
                 >
@@ -551,6 +669,9 @@ export function LoginPage() {
               </div>
             </form>
           )}
+
+          {/* Mount container for Firebase invisible RecaptchaVerifier */}
+          <div id={RECAPTCHA_CONTAINER_ID} />
 
           <div className="relative my-6 flex items-center">
             <div className="flex-grow border-t border-[#E3DBD0]" />

@@ -130,6 +130,7 @@ export const api = {
       otpToken?: string;
       expiresInSeconds?: number;
       verificationCode?: string;
+      notice?: string;
       displayName: string | null;
     }>(
       '/api/auth/request-otp',

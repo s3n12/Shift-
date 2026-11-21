@@ -2,7 +2,7 @@
   "entities": {
     "UserProfileDoc": {
       "title": "UserProfileDoc",
-      "description": "Private user account profile stored in Firestore for Google-authenticated Shift users.",
+      "description": "Private user account profile stored in Firestore for Google and Phone-authenticated Shift users.",
       "type": "object",
       "properties": {
         "uid": {
@@ -17,7 +17,14 @@
           "format": "email",
           "minLength": 3,
           "maxLength": 254,
-          "description": "Verified account email address."
+          "description": "Verified account email address (nullable for phone-only accounts)."
+        },
+        "phone": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 20,
+          "pattern": "^\\+[0-9]{8,16}$",
+          "description": "Verified E.164 mobile phone number (nullable for email-only accounts)."
         },
         "displayName": {
           "type": "string",
@@ -26,7 +33,7 @@
         },
         "authProvider": {
           "type": "string",
-          "enum": ["google"],
+          "enum": ["google", "phone"],
           "description": "Authentication provider for this Firestore profile."
         },
         "createdAt": {

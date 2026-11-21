@@ -283,14 +283,23 @@ async function seedStarterData(uid: string) {
 }
 
 export const firestoreStore = {
-  async syncGoogleUser(fbUser: User): Promise<{ user: UserProfile; token: string }> {
+  async syncFirebaseUser(fbUser: User): Promise<{ user: UserProfile; token: string }> {
     const uid = fbUser.uid;
-    const email = clampString(
-      (fbUser.email || `${uid}@users.shift.app`).toLowerCase(),
-      254
-    );
+    const isPhoneProvider =
+      Boolean(fbUser.phoneNumber) &&
+      !fbUser.providerData.some((p) => p.providerId === 'google.com');
+    const authProvider: 'google' | 'phone' = isPhoneProvider ? 'phone' : 'google';
+    const phone = fbUser.phoneNumber ? clampString(fbUser.phoneNumber, 20) : null;
+    const email = fbUser.email
+      ? clampString(fbUser.email.toLowerCase(), 254)
+      : isPhoneProvider
+        ? null
+        : clampString(`${uid}@users.shift.app`.toLowerCase(), 254);
     const displayName = clampString(
-      fbUser.displayName || email.split('@')[0] || 'Shift User',
+      fbUser.displayName ||
+        phone ||
+        (email ? email.split('@')[0] : '') ||
+        'Shift User',
       120
     );
 
@@ -309,8 +318,9 @@ export const firestoreStore = {
         await setDoc(userRef, {
           uid,
           email,
+          phone,
           displayName,
-          authProvider: 'google',
+          authProvider,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -320,11 +330,16 @@ export const firestoreStore = {
       await seedStarterData(uid);
     } else {
       const existingData = existingSnap.data();
-      if (existingData.displayName !== displayName || existingData.email !== email) {
+      const needsUpdate =
+        existingData.displayName !== displayName ||
+        existingData.email !== email ||
+        (phone !== null && existingData.phone !== phone);
+      if (needsUpdate) {
         try {
           await updateDoc(userRef, {
             displayName,
             email,
+            ...(phone !== null ? { phone } : {}),
             updatedAt: serverTimestamp(),
           });
         } catch (error) {
@@ -339,11 +354,15 @@ export const firestoreStore = {
         id: 1,
         uid,
         email,
-        phone: null,
+        phone,
         displayName,
-        authProvider: 'google',
+        authProvider,
       },
     };
+  },
+
+  async syncGoogleUser(fbUser: User): Promise<{ user: UserProfile; token: string }> {
+    return this.syncFirebaseUser(fbUser);
   },
 
   // --- TASKS ---

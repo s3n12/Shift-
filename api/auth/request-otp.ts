@@ -6,7 +6,11 @@ import {
   OTP_TTL_MS,
   PHONE_OTP_TTL_MS,
 } from '../../src/lib/otp-token.ts';
-import { sendOtpEmail } from '../../src/lib/mailer.ts';
+import {
+  getResendApiKey,
+  MailerConfigError,
+  sendOtpEmail,
+} from '../../src/lib/mailer.ts';
 import {
   maskPhoneNumber,
   normalizeIndianPhone,
@@ -72,18 +76,18 @@ export default async function handler(
         PHONE_OTP_TTL_MS
       );
 
-      const hasFast2SmsKey = Boolean(process.env.FAST2SMS_API_KEY?.trim());
       const delivery = await sendOtpSms(normalizedPhone, code);
-      const exposePreviewCode = !hasFast2SmsKey && delivery.delivered === 'preview';
+      const exposePreviewCode = delivery.delivered === 'preview';
 
       return res.status(200).json({
         ok: true,
         channel: 'phone',
-        delivered: hasFast2SmsKey ? 'sms' : delivery.delivered,
+        delivered: delivery.delivered,
         maskedTarget: maskPhoneNumber(normalizedPhone),
         otpToken,
         expiresInSeconds: Math.round(PHONE_OTP_TTL_MS / 1000),
         ...(exposePreviewCode ? { verificationCode: code } : {}),
+        ...(delivery.notice ? { notice: delivery.notice } : {}),
         displayName: displayName || null,
       });
     }
@@ -96,10 +100,10 @@ export default async function handler(
         .json({ error: 'Please enter a valid email address.' });
     }
 
-    if (!process.env.RESEND_API_KEY?.trim()) {
+    if (!getResendApiKey()) {
       return res.status(503).json({
         error:
-          'Email delivery is not configured yet. Set RESEND_API_KEY in your environment variables to send verification emails.',
+          'Email delivery is not configured yet. Set a valid RESEND_API_KEY in Secrets / environment variables to send verification emails.',
       });
     }
 
@@ -122,6 +126,10 @@ export default async function handler(
       displayName: displayName || null,
     });
   } catch (error) {
+    if (error instanceof MailerConfigError) {
+      console.warn('OTP delivery notice:', error.message);
+      return res.status(error.statusCode).json({ error: error.message });
+    }
     console.error('Error in /api/auth/request-otp:', error);
     const message =
       error instanceof Error && error.message
