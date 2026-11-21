@@ -9,21 +9,7 @@ import {
   signShiftToken,
   verifyPassword,
 } from './src/lib/auth-tokens.ts';
-import {
-  createOtpChallengeToken,
-  generateSixDigitOtp,
-  isValidEmail,
-  maskEmail,
-  OTP_TTL_MS,
-  PHONE_OTP_TTL_MS,
-  verifyOtpChallengeToken,
-} from './src/lib/otp-token.ts';
-import { getResendApiKey, MailerConfigError, sendOtpEmail } from './src/lib/mailer.ts';
-import {
-  maskPhoneNumber,
-  normalizeIndianPhone,
-  sendOtpSms,
-} from './src/lib/sms.ts';
+import { sendOtpEmail } from './src/lib/mailer.ts';
 import {
   createHabit,
   createOtpCode,
@@ -33,8 +19,6 @@ import {
   deleteTask,
   deleteTrip,
   findUserByEmail,
-  findUserByPhone,
-  getOrCreatePhoneUser,
   getOrCreateUser,
   listHabits,
   listTasks,
@@ -193,119 +177,65 @@ app.post('/api/auth/signup', async (req, res) => {
   }
 });
 
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!domain) return email;
+  const visible = local.length <= 2 ? local[0] : `${local.slice(0, 2)}***`;
+  return `${visible}@${domain}`;
+}
+
 app.post('/api/auth/request-otp', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
   try {
-    const { channel, email, phone, displayName } = req.body as {
-      channel?: 'email' | 'phone';
+    const { email, displayName } = req.body as {
       email?: string;
-      phone?: string;
       displayName?: string;
     };
 
-    if (channel === 'phone') {
-      const normalizedPhone = normalizeIndianPhone(phone || '');
-      if (!normalizedPhone) {
-        return res
-          .status(400)
-          .json({ error: 'Please enter a valid 10-digit mobile number.' });
-      }
-
-      const existing = await findUserByPhone(normalizedPhone);
-      const code = generateSixDigitOtp();
-      const { token: otpToken } = createOtpChallengeToken(
-        `phone:${normalizedPhone}`,
-        code,
-        PHONE_OTP_TTL_MS
-      );
-
-      const delivery = await sendOtpSms(normalizedPhone, code);
-
-      await createOtpCode({
-        channel: 'sms',
-        phone: normalizedPhone,
-        code,
-        purpose: 'otp',
-        ttlMs: PHONE_OTP_TTL_MS,
-      });
-
-      const exposePreviewCode = delivery.delivered === 'preview';
-
-      return res.json({
-        ok: true,
-        channel: 'phone',
-        delivered: delivery.delivered,
-        maskedTarget: maskPhoneNumber(normalizedPhone),
-        otpToken,
-        expiresInSeconds: Math.round(PHONE_OTP_TTL_MS / 1000),
-        ...(exposePreviewCode ? { verificationCode: code } : {}),
-        ...(delivery.notice ? { notice: delivery.notice } : {}),
-        displayName: displayName?.trim() || existing?.displayName || null,
-      });
-    }
-
     const normalizedEmail = (email || '').trim().toLowerCase();
-    if (!isValidEmail(normalizedEmail)) {
+    if (!normalizedEmail || !normalizedEmail.includes('@')) {
       return res.status(400).json({ error: 'Please enter a valid email address.' });
     }
 
     const existing = await findUserByEmail(normalizedEmail);
-    const code = generateSixDigitOtp();
-    const { token: otpToken } = createOtpChallengeToken(
-      normalizedEmail,
-      code,
-      OTP_TTL_MS
-    );
-
-    const hasResendKey = Boolean(getResendApiKey());
-    const delivery = await sendOtpEmail(normalizedEmail, code, 'otp');
+    const code = String(crypto.randomInt(100000, 1000000));
 
     await createOtpCode({
       channel: 'email',
       email: normalizedEmail,
       code,
       purpose: 'otp',
-      ttlMs: OTP_TTL_MS,
     });
 
-    // Never return verificationCode when Resend (or SMTP) is configured
-    const exposePreviewCode = !hasResendKey && delivery.delivered === 'preview';
+    const delivery = await sendOtpEmail(normalizedEmail, code, 'otp');
 
     return res.json({
       ok: true,
       channel: 'email',
-      delivered: hasResendKey ? 'email' : delivery.delivered,
+      delivered: delivery.delivered,
       maskedTarget: maskEmail(normalizedEmail),
-      otpToken,
-      expiresInSeconds: Math.round(OTP_TTL_MS / 1000),
-      ...(exposePreviewCode ? { verificationCode: code } : {}),
+      ...(delivery.delivered === 'preview' ? { verificationCode: code } : {}),
       displayName: displayName?.trim() || existing?.displayName || null,
     });
   } catch (error) {
-    if (error instanceof MailerConfigError) {
-      console.warn('OTP delivery notice:', error.message);
-      return res.status(error.statusCode).json({ error: error.message });
-    }
     console.error('Error in /api/auth/request-otp:', error);
-    const msg =
-      error instanceof Error && error.message
-        ? error.message
-        : 'Could not send verification code. Please try again.';
-    return res.status(502).json({ error: msg });
+    return res
+      .status(500)
+      .json({ error: 'Could not send verification code. Please try again.' });
   }
 });
 
 app.post('/api/auth/verify-otp', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
   try {
-    const { channel, email, phone, code, otpToken, displayName } = req.body as {
-      channel?: 'email' | 'phone';
+    const { email, code, displayName } = req.body as {
       email?: string;
-      phone?: string;
       code?: string;
-      otpToken?: string;
       displayName?: string;
     };
+
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    if (!normalizedEmail) {
+      return res.status(400).json({ error: 'Email address is required.' });
+    }
 
     const cleanCode = (code || '').trim();
     if (!/^\d{6}$/.test(cleanCode)) {
@@ -314,86 +244,16 @@ app.post('/api/auth/verify-otp', async (req, res) => {
         .json({ error: 'Please enter the 6-digit verification code.' });
     }
 
-    if (channel === 'phone') {
-      const normalizedPhone = normalizeIndianPhone(phone || '');
-      if (!normalizedPhone) {
-        return res
-          .status(400)
-          .json({ error: 'A valid 10-digit mobile number is required.' });
-      }
-
-      const matchedInStore = await verifyAndConsumeOtp({
-        channel: 'sms',
-        phone: normalizedPhone,
-        code: cleanCode,
-      });
-
-      if (!matchedInStore) {
-        const tokenCheck = otpToken
-          ? verifyOtpChallengeToken({
-              token: otpToken,
-              target: `phone:${normalizedPhone}`,
-              code: cleanCode,
-            })
-          : { valid: false, reason: 'invalid' as const };
-
-        if (!tokenCheck.valid) {
-          const errorMessage =
-            tokenCheck.reason === 'expired'
-              ? 'Verification code expired after 5 minutes. Please request a new code.'
-              : 'Invalid or expired verification code.';
-          return res.status(401).json({ error: errorMessage });
-        }
-      }
-
-      const user = await getOrCreatePhoneUser({
-        phone: normalizedPhone,
-        displayName: displayName?.trim() || null,
-      });
-
-      const token = signShiftToken({
-        uid: user.uid,
-        email: user.email,
-        phone: user.phone,
-        name: user.displayName || undefined,
-      });
-
-      setSessionCookie(req, res, token);
-
-      return res.json({
-        token,
-        user: formatUserResponse(user),
-      });
-    }
-
-    const normalizedEmail = (email || '').trim().toLowerCase();
-    if (!isValidEmail(normalizedEmail)) {
-      return res.status(400).json({ error: 'Email address is required.' });
-    }
-
-    const matchedInStore = await verifyAndConsumeOtp({
+    const matched = await verifyAndConsumeOtp({
       channel: 'email',
       email: normalizedEmail,
       code: cleanCode,
     });
 
-    if (!matchedInStore) {
-      // Fallback to stateless HMAC challenge verification if server restarted
-      const tokenCheck = otpToken
-        ? verifyOtpChallengeToken({
-            token: otpToken,
-            target: normalizedEmail,
-            code: cleanCode,
-          })
-        : { valid: false, reason: 'invalid' as const };
-
-      if (!tokenCheck.valid) {
-        const errorMessage =
-          tokenCheck.reason === 'expired'
-            ? 'Verification code expired after 10 minutes. Please request a new code.'
-            : 'Invalid or expired verification code.';
-        return res.status(401).json({ error: errorMessage });
-      }
+    if (!matched) {
+      return res
+        .status(401)
+        .json({ error: 'Invalid or expired verification code.' });
     }
 
     const existing = await findUserByEmail(normalizedEmail);

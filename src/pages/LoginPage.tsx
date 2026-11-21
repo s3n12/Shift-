@@ -1,5 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import type { ConfirmationResult } from 'firebase/auth';
+import { useState, type FormEvent } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -9,7 +8,6 @@ import {
   Lock,
   Mail,
   ShieldCheck,
-  Smartphone,
   User,
 } from 'lucide-react';
 import { api } from '../lib/api.ts';
@@ -17,141 +15,35 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { LOGIN_HERO_IMAGE } from '../types.ts';
 import { MediaImage } from '../components/MediaImage.tsx';
 
-type AuthMode = 'login' | 'signup' | 'otp' | 'phone';
-type DeliveryMode = 'email' | 'sms' | 'firebase' | 'preview';
-
-const RECAPTCHA_CONTAINER_ID = 'shift-recaptcha-container';
-
-const FIREBASE_FALLBACK_CODES = [
-  'auth/operation-not-allowed',
-  'auth/billing-not-enabled',
-  'auth/unauthorized-domain',
-  'auth/captcha-check-failed',
-  'auth/invalid-app-credential',
-  'auth/app-not-authorized',
-  'auth/internal-error',
-  'auth/network-request-failed',
-];
-
-function maskPhoneDisplay(e164: string): string {
-  if (e164.startsWith('+91') && e164.length === 13) {
-    return `+91 ${e164.slice(3, 5)}****${e164.slice(-4)}`;
-  }
-  return e164;
-}
-
-function getFirebaseErrorCode(err: unknown): string {
-  if (err && typeof err === 'object' && 'code' in err && typeof err.code === 'string') {
-    return err.code;
-  }
-  if (err instanceof Error) {
-    const match = err.message.match(/auth\/[a-z0-9-]+/i);
-    if (match) return match[0].toLowerCase();
-  }
-  return '';
-}
+type AuthMode = 'login' | 'signup' | 'otp';
 
 export function LoginPage() {
-  const {
-    loginWithGoogle,
-    startFirebasePhoneOtp,
-    verifyFirebasePhoneOtp,
-    resetRecaptcha,
-    completeEmailOtpLogin,
-    authError,
-    clearAuthError,
-  } = useAuth();
+  const { loginWithGoogle, completeEmailOtpLogin, authError, clearAuthError } =
+    useAuth();
 
   const [authMode, setAuthMode] = useState<AuthMode>('login');
-  const [otpStep, setOtpStep] = useState<'input' | 'verify'>('input');
+  const [otpStep, setOtpStep] = useState<'email' | 'verify'>('email');
   const [email, setEmail] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [otpInput, setOtpInput] = useState('');
-  const [otpToken, setOtpToken] = useState<string | null>(null);
-  const [firebaseConfirmation, setFirebaseConfirmation] =
-    useState<ConfirmationResult | null>(null);
   const [maskedTarget, setMaskedTarget] = useState('');
-  const [deliveredMode, setDeliveredMode] = useState<DeliveryMode>('email');
+  const [deliveredMode, setDeliveredMode] = useState<'email' | 'preview'>('preview');
   const [deliveredCode, setDeliveredCode] = useState<string | null>(null);
-  const [deliveryNotice, setDeliveryNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const errorMessage = localError || authError;
 
-  useEffect(() => {
-    return () => {
-      resetRecaptcha(RECAPTCHA_CONTAINER_ID);
-    };
-  }, [resetRecaptcha]);
-
   const switchMode = (next: AuthMode) => {
     setAuthMode(next);
-    setOtpStep('input');
+    setOtpStep('email');
     setOtpInput('');
-    setOtpToken(null);
-    setFirebaseConfirmation(null);
     setDeliveredCode(null);
-    setDeliveryNotice(null);
     setLocalError(null);
     clearAuthError();
-    resetRecaptcha(RECAPTCHA_CONTAINER_ID);
-  };
-
-  const requestPhoneOtpFlow = async (cleanDigits: string) => {
-    const phoneE164 = `+91${cleanDigits}`;
-
-    // 1. Primary: Firebase Phone Auth via RecaptchaVerifier + signInWithPhoneNumber
-    try {
-      const confirmation = await startFirebasePhoneOtp(
-        phoneE164,
-        RECAPTCHA_CONTAINER_ID
-      );
-      setFirebaseConfirmation(confirmation);
-      setOtpToken(null);
-      setMaskedTarget(maskPhoneDisplay(phoneE164));
-      setDeliveredMode('firebase');
-      setDeliveredCode(null);
-      setDeliveryNotice(null);
-      setOtpInput('');
-      setOtpStep('verify');
-      return;
-    } catch (fbErr: unknown) {
-      const fbCode = getFirebaseErrorCode(fbErr);
-      if (fbCode === 'auth/invalid-phone-number') {
-        throw new Error('Please enter a valid 10-digit Indian mobile number.');
-      }
-      if (fbCode === 'auth/too-many-requests') {
-        throw new Error('Too many SMS attempts. Please wait a few minutes and try again.');
-      }
-
-      // If Firebase Phone Auth isn't enabled yet or blocked by domain/billing, fall back to backend Fast2SMS / preview
-      const shouldFallback =
-        !fbCode || FIREBASE_FALLBACK_CODES.includes(fbCode);
-      if (!shouldFallback) {
-        throw fbErr;
-      }
-    }
-
-    // 2. Fallback: Backend /api/auth/request-otp (Fast2SMS or local preview mode)
-    const res = await api.requestOtp({
-      channel: 'phone',
-      phone: phoneE164,
-    });
-    setFirebaseConfirmation(null);
-    setMaskedTarget(res.maskedTarget);
-    setDeliveredMode(res.delivered);
-    setOtpToken(res.otpToken ?? null);
-    setDeliveredCode(
-      res.delivered === 'preview' ? (res.verificationCode ?? null) : null
-    );
-    setDeliveryNotice(res.notice ?? null);
-    setOtpInput('');
-    setOtpStep('verify');
   };
 
   const handlePrimarySubmit = async (e: FormEvent) => {
@@ -176,29 +68,11 @@ export function LoginPage() {
         return;
       }
 
-      if (authMode === 'phone') {
-        const cleanDigits = phoneNumber.replace(/\D/g, '');
-        if (cleanDigits.length !== 10) {
-          setLocalError('Please enter a valid 10-digit mobile number.');
-          return;
-        }
-        await requestPhoneOtpFlow(cleanDigits);
-        return;
-      }
-
       // Email OTP mode
-      const res = await api.requestOtp({
-        channel: 'email',
-        email: email.trim(),
-      });
-      setFirebaseConfirmation(null);
+      const res = await api.requestOtp({ email: email.trim() });
       setMaskedTarget(res.maskedTarget);
       setDeliveredMode(res.delivered);
-      setOtpToken(res.otpToken ?? null);
-      setDeliveredCode(
-        res.delivered === 'preview' ? (res.verificationCode ?? null) : null
-      );
-      setDeliveryNotice(res.notice ?? null);
+      setDeliveredCode(res.verificationCode ?? null);
       setOtpInput('');
       setOtpStep('verify');
     } catch (err: unknown) {
@@ -216,37 +90,15 @@ export function LoginPage() {
     clearAuthError();
     setBusy(true);
     try {
-      if (authMode === 'phone' && firebaseConfirmation) {
-        await verifyFirebasePhoneOtp(firebaseConfirmation, otpInput.trim());
-        return;
-      }
-
-      const res =
-        authMode === 'phone'
-          ? await api.verifyOtp({
-              channel: 'phone',
-              phone: `+91${phoneNumber.replace(/\D/g, '')}`,
-              code: otpInput.trim(),
-              otpToken: otpToken ?? undefined,
-            })
-          : await api.verifyOtp({
-              channel: 'email',
-              email: email.trim(),
-              code: otpInput.trim(),
-              otpToken: otpToken ?? undefined,
-            });
+      const res = await api.verifyOtp({
+        email: email.trim(),
+        code: otpInput.trim(),
+      });
       completeEmailOtpLogin(res.token, res.user);
     } catch (err: unknown) {
-      const fbCode = getFirebaseErrorCode(err);
-      if (fbCode === 'auth/invalid-verification-code') {
-        setLocalError('Invalid 6-digit verification code. Please check the SMS and try again.');
-      } else if (fbCode === 'auth/code-expired') {
-        setLocalError('This verification code has expired. Click Resend code to request a new one.');
-      } else {
-        setLocalError(
-          err instanceof Error ? err.message : 'Invalid verification code.'
-        );
-      }
+      setLocalError(
+        err instanceof Error ? err.message : 'Invalid verification code.'
+      );
     } finally {
       setBusy(false);
     }
@@ -256,28 +108,10 @@ export function LoginPage() {
     setLocalError(null);
     setBusy(true);
     try {
-      if (authMode === 'phone') {
-        const cleanDigits = phoneNumber.replace(/\D/g, '');
-        if (cleanDigits.length !== 10) {
-          setLocalError('Please enter a valid 10-digit mobile number.');
-          return;
-        }
-        await requestPhoneOtpFlow(cleanDigits);
-        return;
-      }
-
-      const res = await api.requestOtp({
-        channel: 'email',
-        email: email.trim(),
-      });
-      setFirebaseConfirmation(null);
+      const res = await api.requestOtp({ email: email.trim() });
       setMaskedTarget(res.maskedTarget);
       setDeliveredMode(res.delivered);
-      setOtpToken(res.otpToken ?? null);
-      setDeliveredCode(
-        res.delivered === 'preview' ? (res.verificationCode ?? null) : null
-      );
-      setDeliveryNotice(res.notice ?? null);
+      setDeliveredCode(res.verificationCode ?? null);
       setOtpInput('');
     } catch (err: unknown) {
       setLocalError(
@@ -300,13 +134,11 @@ export function LoginPage() {
     }
   };
 
-  const isOtpVerifyView =
-    (authMode === 'otp' || authMode === 'phone') && otpStep === 'verify';
-  const isPhoneOtp = authMode === 'phone';
+  const isOtpVerifyView = authMode === 'otp' && otpStep === 'verify';
 
   return (
     <div className="min-h-screen bg-[#FAF8F5] grid grid-cols-1 lg:grid-cols-2 items-stretch">
-      {/* Left Side: Sign In, Sign Up, Email OTP, Phone OTP + Login with Google */}
+      {/* Left Side: Sign In, Sign Up, Email OTP + Login with Google */}
       <div className="flex flex-col justify-between px-6 py-8 sm:px-12 lg:px-16 xl:px-20">
         <div className="flex items-center justify-between">
           <span className="font-display text-2xl font-semibold tracking-tight text-[#1E293B]">
@@ -323,22 +155,21 @@ export function LoginPage() {
               Work with clarity. Unwind without guilt.
             </h1>
             <p className="mt-3 text-[15px] text-[#5C6672] leading-relaxed">
-              Sign in with your email and password, Email OTP, Phone OTP, or Google to manage weekday priorities and weekend rituals.
+              Sign in with your email and password, a 6-digit Email OTP, or Google to manage weekday priorities and weekend rituals.
             </p>
           </div>
 
-          {/* 4-option Auth Method Selector */}
+          {/* 3-option Auth Method Selector */}
           <div
             role="tablist"
             aria-label="Sign in method"
-            className="grid grid-cols-4 gap-1 p-1 mb-6 rounded-full bg-[#EFEAE2] border border-[#E3DBD0]"
+            className="grid grid-cols-3 gap-1 p-1 mb-6 rounded-full bg-[#EFEAE2] border border-[#E3DBD0]"
           >
             {(
               [
                 { id: 'login', label: 'Sign In' },
                 { id: 'signup', label: 'Sign Up' },
                 { id: 'otp', label: 'Email OTP' },
-                { id: 'phone', label: 'Phone OTP' },
               ] as const
             ).map((tab) => {
               const active = authMode === tab.id;
@@ -349,7 +180,7 @@ export function LoginPage() {
                   role="tab"
                   aria-selected={active}
                   onClick={() => switchMode(tab.id)}
-                  className={`py-2 px-2 sm:px-3 rounded-full text-xs font-medium whitespace-nowrap transition-all duration-200 cursor-pointer ${
+                  className={`py-2 px-3 rounded-full text-xs font-medium whitespace-nowrap transition-all duration-200 cursor-pointer ${
                     active
                       ? 'bg-[#1E293B] text-white shadow-sm'
                       : 'text-[#5C6672] hover:text-[#1E293B]'
@@ -397,67 +228,32 @@ export function LoginPage() {
                 </div>
               )}
 
-              {authMode === 'phone' ? (
-                <div>
-                  <label
-                    htmlFor="shift-phone"
-                    className="block text-xs font-medium text-[#475569] mb-1.5"
-                  >
-                    Mobile number
-                  </label>
-                  <div className="flex items-center rounded-2xl bg-white border border-[#E3DBD0] focus-within:border-[#1E293B] focus-within:ring-2 focus-within:ring-[#1E293B]/10 transition overflow-hidden">
-                    <div className="inline-flex items-center gap-2 pl-4 pr-3 py-3 border-r border-[#EFEAE2] text-sm font-medium text-[#1E293B] select-none shrink-0 bg-[#FAF8F5]/60">
-                      <Smartphone
-                        className="w-4 h-4 text-[#8C95A0]"
-                        strokeWidth={1.8}
-                      />
-                      <span className="font-mono text-[13px]">+91</span>
-                    </div>
-                    <input
-                      id="shift-phone"
-                      type="tel"
-                      inputMode="numeric"
-                      pattern="[0-9]{10}"
-                      maxLength={10}
-                      required
-                      autoComplete="tel-national"
-                      value={phoneNumber}
-                      onChange={(e) =>
-                        setPhoneNumber(e.target.value.replace(/\D/g, '').slice(0, 10))
-                      }
-                      placeholder="9876543210"
-                      className="w-full px-3.5 py-3 bg-transparent text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none tabular-nums"
-                    />
-                  </div>
+              <div>
+                <label
+                  htmlFor="shift-email"
+                  className="block text-xs font-medium text-[#475569] mb-1.5"
+                >
+                  Email address
+                </label>
+                <div className="relative">
+                  <Mail
+                    className="w-4 h-4 text-[#8C95A0] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"
+                    strokeWidth={1.8}
+                  />
+                  <input
+                    id="shift-email"
+                    type="email"
+                    required
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white border border-[#E3DBD0] text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#1E293B] focus:ring-2 focus:ring-[#1E293B]/10 transition"
+                  />
                 </div>
-              ) : (
-                <div>
-                  <label
-                    htmlFor="shift-email"
-                    className="block text-xs font-medium text-[#475569] mb-1.5"
-                  >
-                    Email address
-                  </label>
-                  <div className="relative">
-                    <Mail
-                      className="w-4 h-4 text-[#8C95A0] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"
-                      strokeWidth={1.8}
-                    />
-                    <input
-                      id="shift-email"
-                      type="email"
-                      required
-                      autoComplete="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="you@example.com"
-                      className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white border border-[#E3DBD0] text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#1E293B] focus:ring-2 focus:ring-[#1E293B]/10 transition"
-                    />
-                  </div>
-                </div>
-              )}
+              </div>
 
-              {(authMode === 'login' || authMode === 'signup') && (
+              {authMode !== 'otp' && (
                 <div>
                   <label
                     htmlFor="shift-password"
@@ -508,7 +304,7 @@ export function LoginPage() {
                 disabled={busy}
                 className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-full bg-[#1E293B] text-white text-sm font-medium hover:bg-[#0F172A] active:scale-[0.99] transition-all duration-200 disabled:opacity-60 cursor-pointer"
               >
-                {(authMode === 'otp' || authMode === 'phone') && (
+                {authMode === 'otp' && (
                   <ShieldCheck className="w-4 h-4 shrink-0" strokeWidth={1.9} />
                 )}
                 <span>
@@ -522,9 +318,7 @@ export function LoginPage() {
                       ? 'Sign In to Shift'
                       : authMode === 'signup'
                         ? 'Create Account'
-                        : authMode === 'phone'
-                          ? 'Send 6-Digit Phone OTP'
-                          : 'Send 6-Digit Email OTP'}
+                        : 'Send 6-Digit Email OTP'}
                 </span>
                 <ArrowRight className="w-4 h-4 shrink-0" strokeWidth={1.9} />
               </button>
@@ -542,31 +336,13 @@ export function LoginPage() {
                       Enter Verification Code
                     </p>
                     <p className="text-[#5C6672] mt-0.5 text-xs leading-relaxed">
-                      {isPhoneOtp ? (
-                        deliveredMode === 'firebase' || deliveredMode === 'sms' ? (
-                          <>
-                            We sent a 6-digit SMS verification code to{' '}
-                            <span className="font-medium text-[#1E293B]">
-                              {maskedTarget}
-                            </span>
-                            . Enter it below within 5 minutes.
-                          </>
-                        ) : (
-                          <>
-                            Enter the 6-digit verification code generated for{' '}
-                            <span className="font-medium text-[#1E293B]">
-                              {maskedTarget}
-                            </span>
-                            . It expires in 5 minutes.
-                          </>
-                        )
-                      ) : deliveredMode === 'email' ? (
+                      {deliveredMode === 'email' ? (
                         <>
                           We emailed a 6-digit verification code to{' '}
                           <span className="font-medium text-[#1E293B]">
                             {maskedTarget}
                           </span>
-                          . Enter it below within 10 minutes.
+                          .
                         </>
                       ) : (
                         <>
@@ -578,7 +354,7 @@ export function LoginPage() {
                         </>
                       )}
                     </p>
-                    {deliveredMode === 'preview' && deliveredCode && (
+                    {deliveredCode && (
                       <div className="mt-2.5 pt-2.5 border-t border-[#EFEAE2] space-y-1.5">
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-xs text-[#64748B]">
@@ -596,11 +372,7 @@ export function LoginPage() {
                           </button>
                         </div>
                         <p className="text-[11px] text-[#94A3B8]">
-                          {deliveryNotice
-                            ? deliveryNotice
-                            : isPhoneOtp
-                              ? 'Add FAST2SMS_API_KEY in Secrets to deliver real SMS.'
-                              : 'Set RESEND_API_KEY in environment variables to send real OTP emails.'}
+                          Add RESEND_API_KEY in Secrets to deliver real OTP emails.
                         </p>
                       </div>
                     )}
@@ -644,14 +416,10 @@ export function LoginPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    setOtpStep('input');
+                    setOtpStep('email');
                     setOtpInput('');
-                    setOtpToken(null);
-                    setFirebaseConfirmation(null);
                     setDeliveredCode(null);
-                    setDeliveryNotice(null);
                     setLocalError(null);
-                    resetRecaptcha(RECAPTCHA_CONTAINER_ID);
                   }}
                   className="inline-flex items-center gap-1 text-[#64748B] hover:text-[#1E293B] cursor-pointer"
                 >
@@ -669,9 +437,6 @@ export function LoginPage() {
               </div>
             </form>
           )}
-
-          {/* Mount container for Firebase invisible RecaptchaVerifier */}
-          <div id={RECAPTCHA_CONTAINER_ID} />
 
           <div className="relative my-6 flex items-center">
             <div className="flex-grow border-t border-[#E3DBD0]" />

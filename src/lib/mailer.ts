@@ -1,21 +1,4 @@
 import nodemailer from 'nodemailer';
-import { sanitizeSecretEnv } from './secret-utils.ts';
-
-export class MailerConfigError extends Error {
-  statusCode: number;
-
-  constructor(message: string, statusCode = 400) {
-    super(message);
-    this.name = 'MailerConfigError';
-    this.statusCode = statusCode;
-  }
-}
-
-export function getResendApiKey(): string | null {
-  return sanitizeSecretEnv(process.env.RESEND_API_KEY, 'RESEND_API_KEY', {
-    stripBearer: true,
-  });
-}
 
 function buildOtpEmailContent(code: string, purpose: 'login' | 'signup' | 'otp') {
   const actionLabel =
@@ -52,66 +35,23 @@ function buildOtpEmailContent(code: string, purpose: 'login' | 'signup' | 'otp')
   return { subject, text, html };
 }
 
-function parseResendError(status: number, rawBody: string): string {
-  try {
-    const parsed = JSON.parse(rawBody) as { message?: string; name?: string };
-    if (parsed.message && typeof parsed.message === 'string') {
-      if (status === 401) {
-        return 'Your RESEND_API_KEY in Secrets is invalid or revoked. Generate a new key starting with "re_" at resend.com/api-keys and update RESEND_API_KEY in Secrets.';
-      }
-      if (status === 403) {
-        return `Email delivery failed: ${parsed.message}`;
-      }
-      if (status === 422) {
-        return `Email delivery rejected: ${parsed.message}`;
-      }
-      if (status === 429) {
-        return 'Too many verification emails requested. Please wait a moment and try again.';
-      }
-      return `Could not send verification email: ${parsed.message}`;
-    }
-  } catch {
-    // Non-JSON error body
-  }
-
-  if (status === 401 || status === 403) {
-    return 'Your RESEND_API_KEY in Secrets is invalid. Update RESEND_API_KEY with a valid key from resend.com/api-keys.';
-  }
-  if (status === 429) {
-    return 'Too many verification emails requested. Please wait a moment and try again.';
-  }
-  return 'Could not deliver the verification email right now. Please try again.';
-}
-
 export async function sendOtpEmail(
   toEmail: string,
   code: string,
   purpose: 'login' | 'signup' | 'otp'
 ): Promise<{ delivered: 'email' | 'preview' }> {
-  const resendKey = getResendApiKey();
+  const resendKey = process.env.RESEND_API_KEY?.trim();
   const smtpHost = process.env.SMTP_HOST?.trim();
   const smtpUser = process.env.SMTP_USER?.trim();
   const smtpPass = process.env.SMTP_PASS?.trim();
   const fromAddress =
-    sanitizeSecretEnv(process.env.RESEND_FROM_EMAIL, 'RESEND_FROM_EMAIL') ||
-    sanitizeSecretEnv(process.env.EMAIL_FROM, 'EMAIL_FROM') ||
-    smtpUser ||
-    'onboarding@resend.dev';
+    process.env.EMAIL_FROM?.trim() || smtpUser || 'Shift <onboarding@resend.dev>';
 
   const { subject, text, html } = buildOtpEmailContent(code, purpose);
 
   if (resendKey) {
-    if (!/^re_[A-Za-z0-9_]{8,}$/.test(resendKey)) {
-      console.warn('Resend OTP skipped: RESEND_API_KEY does not match expected "re_..." format.');
-      throw new MailerConfigError(
-        'Your RESEND_API_KEY in Secrets does not match Resend key format (keys start with "re_"). Create an API key at resend.com/api-keys and update RESEND_API_KEY in Secrets.',
-        400
-      );
-    }
-
-    let response: Response;
     try {
-      response = await fetch('https://api.resend.com/emails', {
+      const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${resendKey}`,
@@ -125,46 +65,41 @@ export async function sendOtpEmail(
           html,
         }),
       });
+      if (response.ok) {
+        return { delivered: 'email' };
+      }
+      console.warn('Resend OTP delivery unavailable, using preview mode:', response.status);
     } catch (err) {
-      console.warn('Resend network error:', err);
-      throw new MailerConfigError(
-        'Could not reach the email delivery service. Please try again in a moment.',
-        502
-      );
+      console.warn('Resend network error, using preview mode:', err);
     }
-
-    if (!response.ok) {
-      const errBody = await response.text().catch(() => '');
-      console.warn('Resend OTP delivery rejected:', response.status);
-      throw new MailerConfigError(
-        parseResendError(response.status, errBody),
-        response.status === 429 ? 429 : response.status >= 500 ? 502 : 400
-      );
-    }
-
-    return { delivered: 'email' };
+    return { delivered: 'preview' };
   }
 
   if (smtpHost && smtpUser && smtpPass) {
-    const port = Number(process.env.SMTP_PORT || 587);
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port,
-      secure: port === 465,
-      auth: {
-        user: smtpUser,
-        pass: smtpPass,
-      },
-    });
+    try {
+      const port = Number(process.env.SMTP_PORT || 587);
+      const transporter = nodemailer.createTransport({
+        host: smtpHost,
+        port,
+        secure: port === 465,
+        auth: {
+          user: smtpUser,
+          pass: smtpPass,
+        },
+      });
 
-    await transporter.sendMail({
-      from: fromAddress,
-      to: toEmail,
-      subject,
-      text,
-      html,
-    });
-    return { delivered: 'email' };
+      await transporter.sendMail({
+        from: fromAddress,
+        to: toEmail,
+        subject,
+        text,
+        html,
+      });
+      return { delivered: 'email' };
+    } catch (err) {
+      console.warn('SMTP delivery failed, using preview mode:', err);
+      return { delivered: 'preview' };
+    }
   }
 
   return { delivered: 'preview' };

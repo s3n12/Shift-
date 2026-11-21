@@ -7,15 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import {
-  onAuthStateChanged,
-  RecaptchaVerifier,
-  signInWithPhoneNumber,
-  signInWithPopup,
-  signOut,
-  type ConfirmationResult,
-  type User,
-} from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
 import { FIRESTORE_SESSION_TOKEN, firestoreStore } from '../lib/firestore-store.ts';
 import { api } from '../lib/api.ts';
@@ -29,15 +21,6 @@ interface AuthContextValue {
   clearAuthError: () => void;
   getToken: () => Promise<string | null>;
   loginWithGoogle: () => Promise<void>;
-  startFirebasePhoneOtp: (
-    phoneE164: string,
-    recaptchaContainerId: string
-  ) => Promise<ConfirmationResult>;
-  verifyFirebasePhoneOtp: (
-    confirmation: ConfirmationResult,
-    code: string
-  ) => Promise<void>;
-  resetRecaptcha: (recaptchaContainerId?: string) => void;
   completeEmailOtpLogin: (token: string, profile: UserProfile) => void;
   logout: () => Promise<void>;
 }
@@ -50,30 +33,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [authError, setAuthError] = useState<string | null>(null);
   const tokenRef = useRef<string | null>(null);
   const isEmailSessionRef = useRef(false);
-  const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
 
   const syncFirebaseUser = useCallback(async (fbUser: User) => {
-    const res = await firestoreStore.syncFirebaseUser(fbUser);
+    const res = await firestoreStore.syncGoogleUser(fbUser);
     tokenRef.current = res.token;
     isEmailSessionRef.current = false;
     setUser(res.user);
-  }, []);
-
-  const resetRecaptcha = useCallback((recaptchaContainerId?: string) => {
-    if (recaptchaVerifierRef.current) {
-      try {
-        recaptchaVerifierRef.current.clear();
-      } catch {
-        // Ignore cleanup errors if element was unmounted
-      }
-      recaptchaVerifierRef.current = null;
-    }
-    if (typeof document !== 'undefined' && recaptchaContainerId) {
-      const container = document.getElementById(recaptchaContainerId);
-      if (container) {
-        container.innerHTML = '';
-      }
-    }
   }, []);
 
   useEffect(() => {
@@ -131,9 +96,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
       unsubscribe();
-      resetRecaptcha();
     };
-  }, [syncFirebaseUser, resetRecaptcha]);
+  }, [syncFirebaseUser]);
 
   const getToken = useCallback(async (): Promise<string | null> => {
     if (isEmailSessionRef.current && tokenRef.current) {
@@ -168,49 +132,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [syncFirebaseUser]);
 
-  const startFirebasePhoneOtp = useCallback(
-    async (
-      phoneE164: string,
-      recaptchaContainerId: string
-    ): Promise<ConfirmationResult> => {
-      setAuthError(null);
-      resetRecaptcha(recaptchaContainerId);
-
-      const container = document.getElementById(recaptchaContainerId);
-      if (!container) {
-        throw new Error('reCAPTCHA container is not mounted.');
-      }
-
-      const verifier = new RecaptchaVerifier(auth, container, {
-        size: 'invisible',
-      });
-      recaptchaVerifierRef.current = verifier;
-
-      try {
-        const confirmation = await signInWithPhoneNumber(
-          auth,
-          phoneE164,
-          verifier
-        );
-        return confirmation;
-      } catch (err) {
-        resetRecaptcha(recaptchaContainerId);
-        throw err;
-      }
-    },
-    [resetRecaptcha]
-  );
-
-  const verifyFirebasePhoneOtp = useCallback(
-    async (confirmation: ConfirmationResult, code: string) => {
-      setAuthError(null);
-      const credential = await confirmation.confirm(code);
-      await syncFirebaseUser(credential.user);
-      resetRecaptcha();
-    },
-    [syncFirebaseUser, resetRecaptcha]
-  );
-
   const completeEmailOtpLogin = useCallback(
     (token: string, profile: UserProfile) => {
       tokenRef.current = token;
@@ -226,7 +147,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isEmailSessionRef.current = false;
     tokenRef.current = null;
     setUser(null);
-    resetRecaptcha();
     try {
       await api.logout();
     } catch {
@@ -237,7 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error('Error signing out of Firebase:', err);
     }
-  }, [resetRecaptcha]);
+  }, []);
 
   const clearAuthError = useCallback(() => setAuthError(null), []);
 
@@ -250,9 +170,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearAuthError,
         getToken,
         loginWithGoogle,
-        startFirebasePhoneOtp,
-        verifyFirebasePhoneOtp,
-        resetRecaptcha,
         completeEmailOtpLogin,
         logout,
       }}
