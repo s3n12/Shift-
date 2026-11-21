@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
 import { api } from '../lib/api.ts';
 import type { UserProfile } from '../types.ts';
@@ -32,11 +32,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const tokenRef = useRef<string | null>(null);
   const isEmailSessionRef = useRef(false);
 
-  const syncFirebaseUser = useCallback(async (idToken: string) => {
-    tokenRef.current = idToken;
-    isEmailSessionRef.current = false;
-    const { user: dbUser } = await api.getMe(idToken);
-    setUser(dbUser);
+  const syncFirebaseUser = useCallback(async (fbUser: User, idToken: string) => {
+    const res = await api.getMe(idToken, {
+      uid: fbUser.uid,
+      email: fbUser.email || `${fbUser.uid}@users.shift.app`,
+      displayName: fbUser.displayName,
+    });
+    if (res.token && res.token.startsWith('local.')) {
+      tokenRef.current = res.token;
+      isEmailSessionRef.current = true;
+    } else {
+      tokenRef.current = idToken;
+      isEmailSessionRef.current = false;
+    }
+    setUser(res.user);
   }, []);
 
   useEffect(() => {
@@ -51,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (!fbUser) {
-        // Attempt to restore an active HttpOnly cookie session (Email/Password or Email OTP)
+        // Attempt to restore an active session (HttpOnly cookie on server or local session on static Vercel)
         try {
           const restored = await api.getMe(null);
           if (!active) return;
@@ -66,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
           }
         } catch {
-          // No active cookie session
+          // No active session
         }
 
         if (!active) return;
@@ -79,7 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         const idToken = await fbUser.getIdToken();
-        await syncFirebaseUser(idToken);
+        await syncFirebaseUser(fbUser, idToken);
         if (active) setAuthError(null);
       } catch (err) {
         console.error('Failed to sync Firebase user:', err);
@@ -115,12 +124,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const result = await signInWithPopup(auth, googleAuthProvider);
       const idToken = await result.user.getIdToken();
-      await syncFirebaseUser(idToken);
+      await syncFirebaseUser(result.user, idToken);
     } catch (err: unknown) {
-      const message =
-        err instanceof Error && err.message.includes('popup-closed-by-user')
-          ? 'Google sign-in popup was closed before completing.'
-          : 'Google sign-in failed. Please allow popups and try again.';
+      const errMsg = err instanceof Error ? err.message : '';
+      let message = 'Google sign-in failed. Please allow popups and try again.';
+      if (errMsg.includes('popup-closed-by-user')) {
+        message = 'Google sign-in popup was closed before completing.';
+      } else if (errMsg.includes('unauthorized-domain')) {
+        const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        message = `Add "${host}" to Authorized Domains in Firebase Console (Authentication → Settings) to enable Google Sign-In on this domain.`;
+      }
       setAuthError(message);
       throw err;
     }
@@ -143,7 +156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.logout();
     } catch {
-      // Ignore cookie clear errors
+      // Ignore logout errors
     }
     try {
       await signOut(auth);
