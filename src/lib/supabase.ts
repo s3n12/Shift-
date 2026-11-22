@@ -3,6 +3,7 @@ import supabasePublicConfig from '../../supabase-config.json';
 import {
   formatSupabaseOtpError,
   parseEmailOtpTarget,
+  resolveAuthRedirectUrl,
   resolveSupabaseConfig,
   type ParsedEmailTarget,
   type SupabaseConfig,
@@ -140,17 +141,32 @@ export async function getSupabaseClient(): Promise<SupabaseClient> {
   return client;
 }
 
+export function getAuthRedirectUrl(): string {
+  const windowOrigin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : undefined;
+
+  return resolveAuthRedirectUrl({
+    windowOrigin,
+    VITE_SITE_URL: import.meta.env.VITE_SITE_URL,
+    NEXT_PUBLIC_SITE_URL: import.meta.env.NEXT_PUBLIC_SITE_URL,
+  });
+}
+
 export async function sendSupabaseEmailOtp(
   rawEmail: string
 ): Promise<ParsedEmailTarget> {
   const target = parseEmailOtpTarget(rawEmail);
   const client = await getSupabaseClient();
+  const emailRedirectTo = getAuthRedirectUrl();
 
   try {
     const { error } = await client.auth.signInWithOtp({
       email: target.email,
       options: {
         shouldCreateUser: true,
+        emailRedirectTo,
       },
     });
 
@@ -252,12 +268,16 @@ export async function signUpWithSupabasePassword(params: {
 
   const client = await getSupabaseClient();
   const cleanName = params.displayName?.trim() || undefined;
+  const emailRedirectTo = getAuthRedirectUrl();
 
   try {
     const { data, error } = await client.auth.signUp({
       email: target.email,
       password: params.password,
-      options: cleanName ? { data: { full_name: cleanName } } : undefined,
+      options: {
+        emailRedirectTo,
+        ...(cleanName ? { data: { full_name: cleanName } } : {}),
+      },
     });
 
     if (error) {
@@ -294,6 +314,26 @@ export async function getActiveSupabaseSession(): Promise<SupabaseAuthSessionRes
   } catch {
     return null;
   }
+}
+
+export async function subscribeSupabaseAuthChanges(
+  onSession: (session: SupabaseAuthSessionResult | null) => void
+): Promise<() => void> {
+  const client = await getOptionalSupabaseClient();
+  if (!client) return () => {};
+  const { data } = client.auth.onAuthStateChange((_event, session) => {
+    if (session && session.user) {
+      onSession({
+        accessToken: session.access_token,
+        user: extractUser(session.user),
+      });
+    } else {
+      onSession(null);
+    }
+  });
+  return () => {
+    data.subscription.unsubscribe();
+  };
 }
 
 export async function signOutSupabase(): Promise<void> {

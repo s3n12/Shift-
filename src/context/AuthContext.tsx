@@ -11,7 +11,11 @@ import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebas
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
 import { FIRESTORE_SESSION_TOKEN, firestoreStore } from '../lib/firestore-store.ts';
 import { api } from '../lib/api.ts';
-import { getActiveSupabaseSession, signOutSupabase } from '../lib/supabase.ts';
+import {
+  getActiveSupabaseSession,
+  signOutSupabase,
+  subscribeSupabaseAuthChanges,
+} from '../lib/supabase.ts';
 import { SUPABASE_SESSION_TOKEN, supabaseStore } from '../lib/supabase-store.ts';
 import { vercelStore } from '../lib/vercel-store.ts';
 import type { UserProfile } from '../types.ts';
@@ -112,9 +116,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
+    let unsubscribeSupabase: (() => void) | null = null;
+    void subscribeSupabaseAuthChanges(async (sbSession) => {
+      if (!active || !sbSession) return;
+      try {
+        const synced = await supabaseStore.syncSupabaseUser(sbSession.user);
+        if (!active) return;
+        tokenRef.current = synced.token || SUPABASE_SESSION_TOKEN;
+        isEmailSessionRef.current = true;
+        setUser(synced.user);
+        setAuthError(null);
+        setLoading(false);
+
+        // Clean up magic link / PKCE callback tokens from URL bar after sign-in
+        if (typeof window !== 'undefined') {
+          const url = new URL(window.location.href);
+          const hasAuthParams =
+            url.searchParams.has('code') ||
+            url.searchParams.has('token_hash') ||
+            url.hash.includes('access_token=');
+          if (hasAuthParams) {
+            url.searchParams.delete('code');
+            url.searchParams.delete('token_hash');
+            url.searchParams.delete('type');
+            window.history.replaceState({}, document.title, url.pathname + url.search);
+          }
+        }
+      } catch {
+        // Ignore transient sync errors; user can still retry
+      }
+    }).then((unsub) => {
+      if (active) {
+        unsubscribeSupabase = unsub;
+      } else {
+        unsub();
+      }
+    });
+
     return () => {
       active = false;
       unsubscribe();
+      if (unsubscribeSupabase) unsubscribeSupabase();
     };
   }, [syncFirebaseUser]);
 

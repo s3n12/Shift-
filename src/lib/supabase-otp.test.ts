@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DEFAULT_PRODUCTION_SITE_URL,
   formatSupabaseOtpError,
   isValidSupabaseUrl,
   normalizeSupabaseUrl,
   parseEmailOtpTarget,
+  resolveAuthRedirectUrl,
   resolveSupabaseConfig,
 } from './supabase-otp.ts';
 
@@ -89,5 +91,35 @@ test('formatSupabaseOtpError maps common Supabase Auth & OTP errors clearly', ()
   assert.equal(
     formatSupabaseOtpError(new Error('SMTP server not configured'), 'send'),
     'SMTP server not configured'
+  );
+});
+
+test('resolveAuthRedirectUrl dynamically uses deployed origin and never redirects to localhost', () => {
+  assert.equal(
+    resolveAuthRedirectUrl({ windowOrigin: 'https://shift-s-nova1.vercel.app/' }),
+    'https://shift-s-nova1.vercel.app'
+  );
+  assert.equal(
+    resolveAuthRedirectUrl({ windowOrigin: 'https://preview-shift.vercel.app' }),
+    'https://preview-shift.vercel.app'
+  );
+  // Localhost origins fall back to VITE_SITE_URL or production Vercel URL
+  assert.equal(
+    resolveAuthRedirectUrl({
+      windowOrigin: 'http://localhost:3000',
+      VITE_SITE_URL: 'https://shift-s-nova1.vercel.app/',
+    }),
+    'https://shift-s-nova1.vercel.app'
+  );
+  assert.equal(
+    resolveAuthRedirectUrl({ windowOrigin: 'http://127.0.0.1:3000' }),
+    DEFAULT_PRODUCTION_SITE_URL
+  );
+  assert.equal(
+    resolveAuthRedirectUrl({
+      windowOrigin: 'javascript:alert(1)',
+      VITE_SITE_URL: 'http://localhost:3000',
+    }),
+    DEFAULT_PRODUCTION_SITE_URL
   );
 });

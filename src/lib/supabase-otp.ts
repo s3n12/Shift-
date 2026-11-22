@@ -35,15 +35,56 @@ export function normalizeSupabaseUrl(rawUrl: string): string {
   }
 }
 
+export const DEFAULT_PRODUCTION_SITE_URL = 'https://shift-s-nova1.vercel.app';
+
+function isLocalhostHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host === '0.0.0.0' ||
+    host.endsWith('.local')
+  );
+}
+
+function parseSafeOrigin(raw: string | undefined): string | null {
+  const cleaned = cleanEnv(raw);
+  if (!cleaned) return null;
+  try {
+    const parsed = new URL(cleaned);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return null;
+    }
+    if (isLocalhostHostname(parsed.hostname)) {
+      return null;
+    }
+    return parsed.origin.replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
+export function resolveAuthRedirectUrl(params: {
+  windowOrigin?: string;
+  VITE_SITE_URL?: string;
+  NEXT_PUBLIC_SITE_URL?: string;
+}): string {
+  return (
+    parseSafeOrigin(params.windowOrigin) ||
+    parseSafeOrigin(params.VITE_SITE_URL) ||
+    parseSafeOrigin(params.NEXT_PUBLIC_SITE_URL) ||
+    DEFAULT_PRODUCTION_SITE_URL
+  );
+}
+
 export function isValidSupabaseUrl(rawUrl: string): boolean {
   try {
     const parsed = new URL(rawUrl);
     if (parsed.protocol !== 'https:') return false;
     const host = parsed.hostname.toLowerCase();
     if (
-      host === 'localhost' ||
-      host === '127.0.0.1' ||
-      host === '::1' ||
+      isLocalhostHostname(host) ||
       host === '169.254.169.254' ||
       /^10\./.test(host) ||
       /^192\.168\./.test(host) ||
