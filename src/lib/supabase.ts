@@ -44,7 +44,7 @@ function buildSupabaseClient(config: SupabaseConfig): SupabaseClient {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: true,
+      detectSessionInUrl: false,
     },
   });
 }
@@ -159,25 +159,16 @@ export async function sendSupabaseEmailOtp(
 ): Promise<ParsedEmailTarget> {
   const target = parseEmailOtpTarget(rawEmail);
   const client = await getSupabaseClient();
-  const emailRedirectTo = getAuthRedirectUrl();
 
-  try {
-    const { error } = await client.auth.signInWithOtp({
-      email: target.email,
-      options: {
-        shouldCreateUser: true,
-        emailRedirectTo,
-      },
-    });
+  const { error } = await client.auth.signInWithOtp({
+    email: target.email,
+  });
 
-    if (error) {
-      throw new Error(formatSupabaseOtpError(error, 'send'));
-    }
-
-    return target;
-  } catch (err) {
-    throw new Error(formatSupabaseOtpError(err, 'send'));
+  if (error) {
+    throw new Error(formatSupabaseOtpError(error, 'send'));
   }
+
+  return target;
 }
 
 export async function verifySupabaseEmailOtp(params: {
@@ -192,31 +183,25 @@ export async function verifySupabaseEmailOtp(params: {
   }
 
   const client = await getSupabaseClient();
-  const verifyType = params.type || 'email';
+  const { data, error } = await client.auth.verifyOtp({
+    email,
+    token: cleanToken,
+    type: params.type || 'email',
+  });
 
-  try {
-    const { data, error } = await client.auth.verifyOtp({
-      email,
-      token: cleanToken,
-      type: verifyType,
-    });
-
-    if (error || !data.session || !data.user) {
-      throw new Error(
-        formatSupabaseOtpError(
-          error || new Error('Invalid or expired verification code.'),
-          'verify'
-        )
-      );
-    }
-
-    return {
-      accessToken: data.session.access_token,
-      user: extractUser(data.user, email),
-    };
-  } catch (err) {
-    throw new Error(formatSupabaseOtpError(err, 'verify'));
+  if (error || !data.session || !data.user) {
+    throw new Error(
+      formatSupabaseOtpError(
+        error || new Error('Invalid or expired verification code.'),
+        'verify'
+      )
+    );
   }
+
+  return {
+    accessToken: data.session.access_token,
+    user: extractUser(data.user, email),
+  };
 }
 
 export async function signInWithSupabasePassword(params: {
@@ -229,28 +214,23 @@ export async function signInWithSupabasePassword(params: {
   }
 
   const client = await getSupabaseClient();
-  try {
-    const { data, error } = await client.auth.signInWithPassword({
-      email,
-      password: params.password,
-    });
+  const { data, error } = await client.auth.signInWithPassword({
+    email,
+    password: params.password,
+  });
 
-    if (error || !data.session || !data.user) {
-      throw new Error(
-        formatSupabaseOtpError(
-          error || new Error('Invalid login credentials'),
-          'login'
-        )
-      );
-    }
-
-    return {
-      accessToken: data.session.access_token,
-      user: extractUser(data.user, email),
-    };
-  } catch (err) {
-    throw new Error(formatSupabaseOtpError(err, 'login'));
+  if (error) {
+    throw new Error(error.message || formatSupabaseOtpError(error, 'login'));
   }
+
+  if (!data.session || !data.user) {
+    throw new Error('Unable to start your session. Please try again.');
+  }
+
+  return {
+    accessToken: data.session.access_token,
+    user: extractUser(data.user, email),
+  };
 }
 
 export async function signUpWithSupabasePassword(params: {
@@ -270,35 +250,31 @@ export async function signUpWithSupabasePassword(params: {
   const cleanName = params.displayName?.trim() || undefined;
   const emailRedirectTo = getAuthRedirectUrl();
 
-  try {
-    const { data, error } = await client.auth.signUp({
-      email: target.email,
-      password: params.password,
-      options: {
-        emailRedirectTo,
-        ...(cleanName ? { data: { full_name: cleanName } } : {}),
-      },
-    });
+  const { data, error } = await client.auth.signUp({
+    email: target.email,
+    password: params.password,
+    options: {
+      emailRedirectTo,
+      ...(cleanName ? { data: { full_name: cleanName } } : {}),
+    },
+  });
 
-    if (error) {
-      throw new Error(formatSupabaseOtpError(error, 'signup'));
-    }
-
-    if (data.session && data.user) {
-      return {
-        needsEmailConfirmation: false,
-        accessToken: data.session.access_token,
-        user: extractUser(data.user, target.email),
-      };
-    }
-
-    return {
-      needsEmailConfirmation: true,
-      target,
-    };
-  } catch (err) {
-    throw new Error(formatSupabaseOtpError(err, 'signup'));
+  if (error) {
+    throw new Error(error.message || formatSupabaseOtpError(error, 'signup'));
   }
+
+  if (data.session && data.user) {
+    return {
+      needsEmailConfirmation: false,
+      accessToken: data.session.access_token,
+      user: extractUser(data.user, target.email),
+    };
+  }
+
+  return {
+    needsEmailConfirmation: true,
+    target,
+  };
 }
 
 export async function getActiveSupabaseSession(): Promise<SupabaseAuthSessionResult | null> {

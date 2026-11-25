@@ -1,4 +1,5 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import type { ConfirmationResult } from 'firebase/auth';
 import {
   ArrowLeft,
   ArrowRight,
@@ -7,10 +8,17 @@ import {
   KeyRound,
   Lock,
   Mail,
+  Phone,
   ShieldCheck,
   User,
 } from 'lucide-react';
 import { api } from '../lib/api.ts';
+import {
+  clearPhoneRecaptcha,
+  sendFirebasePhoneOtp,
+  verifyFirebasePhoneOtp,
+} from '../lib/firebase-phone-auth.ts';
+import { COUNTRY_DIAL_CODES } from '../lib/phone-utils.ts';
 import {
   isSupabaseConfigured,
   sendSupabaseEmailOtp,
@@ -23,36 +31,74 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { LOGIN_HERO_IMAGE } from '../types.ts';
 import { MediaImage } from '../components/MediaImage.tsx';
 
-type AuthMode = 'login' | 'signup' | 'otp';
+type AuthMode = 'login' | 'signup' | 'otp' | 'phone';
+
+const OTP_RESEND_COOLDOWN_SECONDS = 60;
+const PHONE_RECAPTCHA_ID = 'shift-phone-recaptcha';
 
 export function LoginPage() {
-  const { loginWithGoogle, completeEmailOtpLogin, authError, clearAuthError } =
-    useAuth();
+  const {
+    loginWithGoogle,
+    completeFirebaseUserLogin,
+    completeEmailOtpLogin,
+    authError,
+    clearAuthError,
+  } = useAuth();
 
-  const [authMode, setAuthMode] = useState<AuthMode>('login');
+  const [authMode, setAuthMode] = useState<AuthMode>('phone');
   const [otpStep, setOtpStep] = useState<'email' | 'verify'>('email');
   const [otpVerifyType, setOtpVerifyType] = useState<'email' | 'signup'>('email');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [displayName, setDisplayName] = useState('');
+  const [dialCode, setDialCode] = useState('+91');
+  const [phoneInput, setPhoneInput] = useState('');
+  const [phoneE164, setPhoneE164] = useState('');
+  const phoneConfirmationRef = useRef<ConfirmationResult | null>(null);
   const [otpInput, setOtpInput] = useState('');
   const [maskedTarget, setMaskedTarget] = useState('');
   const [otpEmail, setOtpEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [resending, setResending] = useState(false);
   const [resentNotice, setResentNotice] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const errorMessage = localError || authError;
 
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = window.setInterval(() => {
+      setResendCooldown((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [resendCooldown]);
+
+  useEffect(() => {
+    return () => {
+      clearPhoneRecaptcha();
+    };
+  }, []);
+
+  const redirectToDashboard = () => {
+    if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+      window.history.replaceState({}, document.title, '/');
+    }
+  };
+
   const switchMode = (next: AuthMode) => {
+    if (authMode === 'phone' && next !== 'phone') {
+      clearPhoneRecaptcha();
+      phoneConfirmationRef.current = null;
+    }
     setAuthMode(next);
     setOtpStep('email');
     setOtpVerifyType('email');
     setOtpInput('');
     setResentNotice(false);
+    setResendCooldown(0);
     setLocalError(null);
     clearAuthError();
   };
@@ -74,10 +120,12 @@ export function LoginPage() {
             'supabase-password'
           );
           completeEmailOtpLogin(synced.token, synced.user);
+          redirectToDashboard();
           return;
         }
         const res = await api.login({ email: email.trim(), password });
         completeEmailOtpLogin(res.token, res.user);
+        redirectToDashboard();
         return;
       }
 
@@ -95,6 +143,7 @@ export function LoginPage() {
             setMaskedTarget(signupRes.target.maskedEmail);
             setOtpInput('');
             setResentNotice(false);
+            setResendCooldown(OTP_RESEND_COOLDOWN_SECONDS);
             setOtpStep('verify');
             return;
           }
@@ -103,6 +152,7 @@ export function LoginPage() {
             'supabase-password'
           );
           completeEmailOtpLogin(synced.token, synced.user);
+          redirectToDashboard();
           return;
         }
         const res = await api.signup({
@@ -111,16 +161,34 @@ export function LoginPage() {
           displayName: displayName.trim() || undefined,
         });
         completeEmailOtpLogin(res.token, res.user);
+        redirectToDashboard();
         return;
       }
 
-      // Supabase Email OTP mode
+      if (authMode === 'phone') {
+        const sent = await sendFirebasePhoneOtp({
+          phone: phoneInput,
+          dialCode,
+          recaptchaContainerId: PHONE_RECAPTCHA_ID,
+        });
+        phoneConfirmationRef.current = sent.confirmationResult;
+        setPhoneE164(sent.e164);
+        setMaskedTarget(sent.maskedPhone);
+        setOtpInput('');
+        setResentNotice(false);
+        setResendCooldown(OTP_RESEND_COOLDOWN_SECONDS);
+        setOtpStep('verify');
+        return;
+      }
+
+      // Supabase 6-Digit Email OTP mode (no magic link redirect)
       const sent = await sendSupabaseEmailOtp(email);
       setOtpVerifyType('email');
       setOtpEmail(sent.email);
       setMaskedTarget(sent.maskedEmail);
       setOtpInput('');
       setResentNotice(false);
+      setResendCooldown(OTP_RESEND_COOLDOWN_SECONDS);
       setOtpStep('verify');
     } catch (err: unknown) {
       setLocalError(
@@ -137,6 +205,16 @@ export function LoginPage() {
     clearAuthError();
     setBusy(true);
     try {
+      if (authMode === 'phone') {
+        const fbUser = await verifyFirebasePhoneOtp({
+          confirmationResult: phoneConfirmationRef.current,
+          code: otpInput.trim(),
+        });
+        await completeFirebaseUserLogin(fbUser);
+        redirectToDashboard();
+        return;
+      }
+
       const verified = await verifySupabaseEmailOtp({
         email: otpEmail || email,
         token: otpInput.trim(),
@@ -147,6 +225,7 @@ export function LoginPage() {
         'supabase-otp'
       );
       completeEmailOtpLogin(synced.token, synced.user);
+      redirectToDashboard();
     } catch (err: unknown) {
       setLocalError(
         err instanceof Error ? err.message : 'Invalid verification code.'
@@ -157,17 +236,34 @@ export function LoginPage() {
   };
 
   const handleResendOtp = async () => {
+    if (resendCooldown > 0) return;
     setLocalError(null);
     clearAuthError();
     setResentNotice(false);
     setResending(true);
     try {
+      if (authMode === 'phone') {
+        const sent = await sendFirebasePhoneOtp({
+          phone: phoneE164 || phoneInput,
+          dialCode,
+          recaptchaContainerId: PHONE_RECAPTCHA_ID,
+        });
+        phoneConfirmationRef.current = sent.confirmationResult;
+        setPhoneE164(sent.e164);
+        setMaskedTarget(sent.maskedPhone);
+        setOtpInput('');
+        setResentNotice(true);
+        setResendCooldown(OTP_RESEND_COOLDOWN_SECONDS);
+        return;
+      }
+
       const sent = await sendSupabaseEmailOtp(otpEmail || email);
       setOtpVerifyType('email');
       setOtpEmail(sent.email);
       setMaskedTarget(sent.maskedEmail);
       setOtpInput('');
       setResentNotice(true);
+      setResendCooldown(OTP_RESEND_COOLDOWN_SECONDS);
     } catch (err: unknown) {
       setLocalError(
         err instanceof Error ? err.message : 'Could not resend code.'
@@ -182,6 +278,7 @@ export function LoginPage() {
     setGoogleBusy(true);
     try {
       await loginWithGoogle();
+      redirectToDashboard();
     } catch {
       // AuthContext already populates authError
     } finally {
@@ -189,7 +286,8 @@ export function LoginPage() {
     }
   };
 
-  const isOtpVerifyView = authMode === 'otp' && otpStep === 'verify';
+  const isOtpVerifyView =
+    (authMode === 'otp' || authMode === 'phone') && otpStep === 'verify';
 
   return (
     <div className="min-h-screen bg-[#FAF8F5] grid grid-cols-1 lg:grid-cols-2 items-stretch">
@@ -210,18 +308,19 @@ export function LoginPage() {
               Work with clarity. Unwind without guilt.
             </h1>
             <p className="mt-3 text-[15px] text-[#5C6672] leading-relaxed">
-              Sign in with your email and password, a 6-digit Email OTP, or Google to manage weekday priorities and weekend rituals.
+              Sign in with your phone number, email and password, Email OTP, or Google to manage weekday priorities and weekend rituals.
             </p>
           </div>
 
-          {/* 3-option Auth Method Selector */}
+          {/* 4-option Auth Method Selector */}
           <div
             role="tablist"
             aria-label="Sign in method"
-            className="grid grid-cols-3 gap-1 p-1 mb-6 rounded-full bg-[#EFEAE2] border border-[#E3DBD0]"
+            className="grid grid-cols-4 gap-1 p-1 mb-6 rounded-full bg-[#EFEAE2] border border-[#E3DBD0]"
           >
             {(
               [
+                { id: 'phone', label: 'Phone' },
                 { id: 'login', label: 'Sign In' },
                 { id: 'signup', label: 'Sign Up' },
                 { id: 'otp', label: 'Email OTP' },
@@ -235,7 +334,7 @@ export function LoginPage() {
                   role="tab"
                   aria-selected={active}
                   onClick={() => switchMode(tab.id)}
-                  className={`py-2 px-3 rounded-full text-xs font-medium whitespace-nowrap transition-all duration-200 cursor-pointer ${
+                  className={`py-2 px-2 rounded-full text-xs font-medium whitespace-nowrap transition-all duration-200 cursor-pointer ${
                     active
                       ? 'bg-[#1E293B] text-white shadow-sm'
                       : 'text-[#5C6672] hover:text-[#1E293B]'
@@ -283,32 +382,76 @@ export function LoginPage() {
                 </div>
               )}
 
-              <div>
-                <label
-                  htmlFor="shift-email"
-                  className="block text-xs font-medium text-[#475569] mb-1.5"
-                >
-                  Email address
-                </label>
-                <div className="relative">
-                  <Mail
-                    className="w-4 h-4 text-[#8C95A0] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"
-                    strokeWidth={1.8}
-                  />
-                  <input
-                    id="shift-email"
-                    type="email"
-                    required
-                    autoComplete="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@example.com"
-                    className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white border border-[#E3DBD0] text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#1E293B] focus:ring-2 focus:ring-[#1E293B]/10 transition"
-                  />
+              {authMode === 'phone' ? (
+                <div>
+                  <label
+                    htmlFor="shift-phone"
+                    className="block text-xs font-medium text-[#475569] mb-1.5"
+                  >
+                    Mobile number
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      aria-label="Country dial code"
+                      value={dialCode}
+                      onChange={(e) => setDialCode(e.target.value)}
+                      className="w-[104px] shrink-0 px-3 py-3 rounded-2xl bg-white border border-[#E3DBD0] text-sm font-medium text-[#1E293B] focus:outline-none focus:border-[#1E293B] focus:ring-2 focus:ring-[#1E293B]/10 transition cursor-pointer"
+                    >
+                      {COUNTRY_DIAL_CODES.map((opt) => (
+                        <option key={`${opt.code}-${opt.dialCode}`} value={opt.dialCode}>
+                          {opt.code} {opt.dialCode}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="relative flex-1 min-w-0">
+                      <Phone
+                        className="w-4 h-4 text-[#8C95A0] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"
+                        strokeWidth={1.8}
+                      />
+                      <input
+                        id="shift-phone"
+                        type="tel"
+                        required
+                        autoComplete="tel-national"
+                        value={phoneInput}
+                        onChange={(e) => setPhoneInput(e.target.value)}
+                        placeholder={dialCode === '+1' ? '415 555 2671' : '98765 43210'}
+                        className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white border border-[#E3DBD0] text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#1E293B] focus:ring-2 focus:ring-[#1E293B]/10 transition tabular-nums"
+                      />
+                    </div>
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-[#7B8490]">
+                    We&apos;ll text you a 6-digit verification code via Firebase Phone Auth.
+                  </p>
                 </div>
-              </div>
+              ) : (
+                <div>
+                  <label
+                    htmlFor="shift-email"
+                    className="block text-xs font-medium text-[#475569] mb-1.5"
+                  >
+                    Email address
+                  </label>
+                  <div className="relative">
+                    <Mail
+                      className="w-4 h-4 text-[#8C95A0] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"
+                      strokeWidth={1.8}
+                    />
+                    <input
+                      id="shift-email"
+                      type="email"
+                      required
+                      autoComplete="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white border border-[#E3DBD0] text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#1E293B] focus:ring-2 focus:ring-[#1E293B]/10 transition"
+                    />
+                  </div>
+                </div>
+              )}
 
-              {authMode !== 'otp' && (
+              {authMode !== 'otp' && authMode !== 'phone' && (
                 <div>
                   <label
                     htmlFor="shift-password"
@@ -359,7 +502,7 @@ export function LoginPage() {
                 disabled={busy}
                 className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-full bg-[#1E293B] text-white text-sm font-medium hover:bg-[#0F172A] active:scale-[0.99] transition-all duration-200 disabled:opacity-60 cursor-pointer"
               >
-                {authMode === 'otp' && (
+                {(authMode === 'otp' || authMode === 'phone') && (
                   <ShieldCheck className="w-4 h-4 shrink-0" strokeWidth={1.9} />
                 )}
                 <span>
@@ -368,12 +511,16 @@ export function LoginPage() {
                       ? 'Signing in...'
                       : authMode === 'signup'
                         ? 'Creating account...'
-                        : 'Sending 6-digit code...'
+                        : authMode === 'phone'
+                          ? 'Sending SMS code...'
+                          : 'Sending OTP...'
                     : authMode === 'login'
                       ? 'Sign In to Shift'
                       : authMode === 'signup'
                         ? 'Create Account'
-                        : 'Send 6-Digit Email OTP'}
+                        : authMode === 'phone'
+                          ? 'Send SMS Code'
+                          : 'Send OTP'}
                 </span>
                 <ArrowRight className="w-4 h-4 shrink-0" strokeWidth={1.9} />
               </button>
@@ -391,7 +538,9 @@ export function LoginPage() {
                       Enter Verification Code
                     </p>
                     <p className="text-[#5C6672] mt-0.5 text-xs leading-relaxed">
-                      We emailed a 6-digit verification code to{' '}
+                      {authMode === 'phone'
+                        ? 'We texted a 6-digit SMS code to '
+                        : 'We emailed a 6-digit verification code to '}
                       <span className="font-medium text-[#1E293B]">
                         {maskedTarget}
                       </span>
@@ -399,7 +548,9 @@ export function LoginPage() {
                     </p>
                     {resentNotice && (
                       <p className="text-[#4A6B5D] mt-1.5 text-xs font-medium">
-                        A new verification code was sent to your inbox.
+                        {authMode === 'phone'
+                          ? 'A new SMS verification code was sent to your phone.'
+                          : 'A new verification code was sent to your inbox.'}
                       </p>
                     )}
                   </div>
@@ -417,6 +568,7 @@ export function LoginPage() {
                   id="shift-otp"
                   type="text"
                   inputMode="numeric"
+                  autoComplete="one-time-code"
                   pattern="[0-9]{6}"
                   maxLength={6}
                   required
@@ -434,7 +586,7 @@ export function LoginPage() {
                 disabled={busy || resending || otpInput.length !== 6}
                 className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-full bg-[#4A6B5D] text-white text-sm font-medium hover:bg-[#3A564A] active:scale-[0.99] transition-all duration-200 disabled:opacity-50 cursor-pointer"
               >
-                <span>{busy ? 'Verifying...' : 'Verify & Open Shift'}</span>
+                <span>{busy ? 'Verifying...' : 'Verify & Sign In'}</span>
                 <ArrowRight className="w-4 h-4 shrink-0" strokeWidth={1.9} />
               </button>
 
@@ -442,9 +594,14 @@ export function LoginPage() {
                 <button
                   type="button"
                   onClick={() => {
+                    if (authMode === 'phone') {
+                      clearPhoneRecaptcha();
+                      phoneConfirmationRef.current = null;
+                    }
                     setOtpStep('email');
                     setOtpInput('');
                     setResentNotice(false);
+                    setResendCooldown(0);
                     setLocalError(null);
                   }}
                   className="inline-flex items-center gap-1 text-[#64748B] hover:text-[#1E293B] cursor-pointer"
@@ -455,14 +612,21 @@ export function LoginPage() {
                 <button
                   type="button"
                   onClick={handleResendOtp}
-                  disabled={busy || resending}
-                  className="font-medium text-[#D97757] hover:text-[#BF6243] disabled:opacity-50 cursor-pointer"
+                  disabled={busy || resending || resendCooldown > 0}
+                  className="font-medium text-[#D97757] hover:text-[#BF6243] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer tabular-nums"
                 >
-                  {resending ? 'Sending...' : 'Resend code'}
+                  {resending
+                    ? 'Sending...'
+                    : resendCooldown > 0
+                      ? `Resend code (${resendCooldown}s)`
+                      : 'Resend code'}
                 </button>
               </div>
             </form>
           )}
+
+          {/* Persistent invisible Firebase reCAPTCHA container for Phone Auth */}
+          <div id={PHONE_RECAPTCHA_ID} aria-hidden="true" />
 
           <div className="relative my-6 flex items-center">
             <div className="flex-grow border-t border-[#E3DBD0]" />

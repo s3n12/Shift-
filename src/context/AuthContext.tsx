@@ -27,6 +27,7 @@ interface AuthContextValue {
   clearAuthError: () => void;
   getToken: () => Promise<string | null>;
   loginWithGoogle: () => Promise<void>;
+  completeFirebaseUserLogin: (fbUser: User) => Promise<void>;
   completeEmailOtpLogin: (token: string, profile: UserProfile) => void;
   logout: () => Promise<void>;
 }
@@ -193,6 +194,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [syncFirebaseUser]);
 
+  const completeFirebaseUserLogin = useCallback(
+    async (fbUser: User) => {
+      setAuthError(null);
+      await syncFirebaseUser(fbUser);
+    },
+    [syncFirebaseUser]
+  );
+
   const completeEmailOtpLogin = useCallback(
     (token: string, profile: UserProfile) => {
       tokenRef.current = token;
@@ -232,6 +241,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearAuthError,
         getToken,
         loginWithGoogle,
+        completeFirebaseUserLogin,
         completeEmailOtpLogin,
         logout,
       }}

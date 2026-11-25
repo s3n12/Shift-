@@ -64,33 +64,25 @@ test('parseEmailOtpTarget normalizes valid emails and rejects invalid input', ()
   assert.throws(() => parseEmailOtpTarget('   '), /valid email address/i);
 });
 
-test('formatSupabaseOtpError maps common Supabase Auth & OTP errors clearly', () => {
+test('formatSupabaseOtpError produces clear actionable messages', () => {
   assert.match(
     formatSupabaseOtpError(new Error('Token has expired or is invalid'), 'verify'),
-    /Invalid or expired verification code/i
+    /invalid or expired/i
   );
   assert.match(
     formatSupabaseOtpError(new Error('Email logins are disabled'), 'send'),
-    /Enable the Email provider/i
-  );
-  assert.match(
-    formatSupabaseOtpError(new Error('Invalid login credentials'), 'login'),
-    /Incorrect email or password/i
+    /Enable Email authentication/i
   );
   assert.match(
     formatSupabaseOtpError(
       new Error('For security purposes, you can only request this after 60 seconds'),
       'send'
     ),
-    /Too many authentication requests/i
+    /wait a minute/i
   );
   assert.match(
     formatSupabaseOtpError(new Error('VITE_SUPABASE_URL missing'), 'send'),
     /VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY/i
-  );
-  assert.equal(
-    formatSupabaseOtpError(new Error('SMTP server not configured'), 'send'),
-    'SMTP server not configured'
   );
 });
 

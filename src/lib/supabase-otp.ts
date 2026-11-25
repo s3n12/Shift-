@@ -177,7 +177,7 @@ export function formatSupabaseOtpError(
   const rawMessage =
     error instanceof Error
       ? error.message
-      : error && typeof error === 'object' && 'message' in error
+      : typeof error === 'object' && error !== null && 'message' in error
         ? String((error as { message?: unknown }).message || '')
         : '';
 
@@ -190,17 +190,17 @@ export function formatSupabaseOtpError(
     return 'Supabase is not configured yet. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_ANON_KEY) to your environment variables and redeploy.';
   }
   if (lower.includes('invalid api key') || lower.includes('invalid jwt')) {
-    return 'Your Supabase API key is invalid. Check your Supabase project API settings.';
+    return 'Supabase rejected the API key. Check your VITE_SUPABASE_PUBLISHABLE_KEY or VITE_SUPABASE_ANON_KEY.';
   }
   if (lower.includes('email logins are disabled') || lower.includes('signups not allowed')) {
-    return 'Email authentication is disabled in your Supabase project. Enable the Email provider in Supabase Dashboard → Authentication → Providers.';
+    return 'Email sign-in is disabled in your Supabase project. Enable Email authentication in Supabase Dashboard → Authentication → Providers.';
   }
   if (
     lower.includes('rate limit') ||
     lower.includes('too many') ||
     lower.includes('security purposes')
   ) {
-    return 'Too many authentication requests right now. Please wait a minute before trying again.';
+    return 'Too many code requests. Please wait a minute before requesting another 6-digit code.';
   }
   if (
     lower.includes('token has expired') ||
@@ -208,16 +208,7 @@ export function formatSupabaseOtpError(
     lower.includes('invalid otp') ||
     lower.includes('token is invalid')
   ) {
-    return 'Invalid or expired verification code. Please check the 6-digit code or click Resend code.';
-  }
-  if (lower.includes('invalid login credentials')) {
-    return 'Incorrect email or password. You can also sign in instantly with the Email OTP tab.';
-  }
-  if (lower.includes('email not confirmed')) {
-    return 'Please confirm your email address first, or sign in directly using the Email OTP tab.';
-  }
-  if (lower.includes('user already registered') || lower.includes('already been registered')) {
-    return 'An account with this email already exists. Switch to Sign In or Email OTP instead.';
+    return 'This 6-digit code is invalid or expired. Please check the code or click Resend code.';
   }
   if (lower.includes('failed to fetch') || lower.includes('network')) {
     return 'Could not reach Supabase. Check your VITE_SUPABASE_URL and network connection.';
@@ -228,7 +219,7 @@ export function formatSupabaseOtpError(
   }
 
   if (action === 'send') {
-    return 'Could not send the verification email. Please try again.';
+    return 'Could not send the 6-digit code. Please try again.';
   }
   if (action === 'verify') {
     return 'Verification failed. Please check the 6-digit code and try again.';
